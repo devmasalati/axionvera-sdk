@@ -25,7 +25,7 @@ const mockLatestLedgerResponse = {
 const mockAccountResponse = {
   id: 'GD5JPQ7VKFOVRWPOEX74JYXHHFNTFZ2JE5WZ4K2MWTROVHMWHD7KUZ2V',
   account_id: 'GD5JPQ7VKFOVRWPOEX74JYXHHFNTFZ2JE5WZ4K2MWTROVHMWHD7KUZ2V',
-  sequence: 123456789,
+  sequence: '1234567890',
   subentry_count: 0,
   last_modified_ledger: 123456,
   threshold: {
