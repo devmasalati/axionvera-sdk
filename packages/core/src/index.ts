@@ -8,6 +8,7 @@ export type { AxionveraClientConfig } from './client/axionveraClient';
 // Contracts
 export { BaseContract } from './contracts/BaseContract';
 export type { BaseContractConfig, InvokeMethodOptions } from './contracts/BaseContract';
+export type { BaseContractConfig } from './contracts/BaseContract';
 export { VaultContract } from './contracts/VaultContract';
 // Strict argument interfaces for Soroban vault methods (issue #95).
 // These enforce compile-time typo detection (e.g. { amout } instead of { amount }).
@@ -32,12 +33,14 @@ export type { ContractEvent, EventCallback } from './contracts/ContractEventEmit
 // Wallet
 export { LocalKeypairWalletConnector } from './wallet/localKeypairWalletConnector';
 export { BrowserWalletConnector } from './wallet/browserWalletConnector';
+export { LedgerWalletConnector } from './wallet/ledgerWalletConnector';
 export type { WalletConnector } from './wallet/walletConnector';
 
 // Utils
 export { ConcurrencyQueue, createConcurrencyControlledClient } from './utils/concurrencyQueue';
 export { retry, createHttpClientWithRetry } from './utils/httpInterceptor';
-export { buildContractCallOperation, buildContractCallTransaction, buildContractAuthPayload, toScVal } from './utils/transactionBuilder';
+export { buildContractCallOperation, buildContractCallTransaction, buildContractAuthPayload, bumpTransactionFee, toScVal } from './utils/transactionBuilder';
+export type { BumpTransactionFeeOptions } from './utils/transactionBuilder';
 export { getDefaultRpcUrl, getNetworkPassphrase, resolveNetworkConfig } from './utils/networkConfig';
 export { generateTransactionURI, generatePayURI } from './utils/sep7';
 export { decodeXdrBase64, clearXdrCache, getXdrCacheSize } from './utils/xdrCache';
@@ -58,8 +61,11 @@ export {
   StellarRpcNetworkError,
   StellarRpcResponseError,
   StellarRpcTimeoutError,
+  TransactionTimeoutError,
   WalletNotInstalledError,
   FaucetRateLimitError,
+  DeviceLockedError,
+  UserRejectedError,
   toAxionveraError
 } from './errors/axionveraError';
 
@@ -83,3 +89,8 @@ export type {
 export * from './test/msw/setup';
 export * from './test/msw/handlers';
 export { server } from './test/msw/server';
+
+// Codegen utilities (for programmatic use)
+export { parseWasm } from './codegen/wasmParser';
+export { generateContractClass } from './codegen/generator';
+export type { ContractSpec, SpecFunction, SpecParam, SpecStruct, SpecEnum } from './codegen/wasmParser';

@@ -128,6 +128,36 @@ We provide detailed, runnable examples in the [`examples/`](./examples/) directo
 - ⚖️ **Check Balance**: [balanceExample.ts](./examples/balanceExample.ts)
 - 🔄 **HTTP Retry Logic**: [retryExample.ts](./examples/retryExample.ts)
 
+### Recover a Stuck Transaction with a Fee Bump
+
+When a signed transaction is still pending and the network fee market moves, you can wrap the original signed XDR in a fee bump envelope instead of asking the user to re-sign the contract call.
+
+```typescript
+import { Keypair, Networks } from "@stellar/stellar-sdk";
+import {
+  LocalKeypairWalletConnector,
+  bumpTransactionFee
+} from "@axionvera/core";
+
+const sponsorWallet = new LocalKeypairWalletConnector(
+  Keypair.fromSecret(process.env.SPONSOR_SECRET_KEY!)
+);
+
+const feeBumpEnvelopeXdr = bumpTransactionFee(userSignedXdr, 500, {
+  feeSource: await sponsorWallet.getPublicKey(),
+  networkPassphrase: Networks.TESTNET
+});
+
+const sponsorSignedXdr = await sponsorWallet.signTransaction(
+  feeBumpEnvelopeXdr,
+  Networks.TESTNET
+);
+
+await client.sendTransaction(sponsorSignedXdr);
+```
+
+This preserves the original user signature on the inner transaction. Only the outer fee bump envelope is signed by the sponsor wallet.
+
 ---
 
 ## 📚 API Reference
@@ -148,6 +178,8 @@ A high-level abstraction for the Axionvera Vault smart contract.
 - `deposit({ amount, from })`: Deposits tokens into the vault.
 - `withdraw({ amount, from })`: Withdraws tokens from the vault.
 - `getBalance({ account })`: Retrieves the vault balance for a specific account.
+- `getVaultShares({ account })`: Queries the user's balance of the Vault's share token (read-only).
+- `getExchangeRate()`: Queries the current conversion rate between 1 Share and the underlying asset (read-only).
 - `claimRewards({ from })`: Claims pending rewards for the caller.
 
 ### `FaucetClient`
@@ -158,6 +190,7 @@ Automated funding for Testnet and Futurenet.
 Standardized URI generation for mobile wallet integration.
 - `generateTransactionURI(xdr, callbackUrl)`: Generates a `web+stellar:tx` URI.
 - `generatePayURI(destination, amount, assetCode, assetIssuer)`: Generates a `web+stellar:pay` URI.
+- `bumpTransactionFee(signedXdr, newBaseFee, options)`: Wraps a signed transaction XDR in an unsigned fee bump envelope for sponsor signing.
 
 ### `WalletConnector` (Interface)
 Implement this interface to integrate browser extension wallets (like Freighter) or use the provided `LocalKeypairWalletConnector` for backend/scripting services.
