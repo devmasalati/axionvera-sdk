@@ -1,6 +1,9 @@
 import { CloudWatchConfig, LogEntry } from './types';
 
 interface CloudWatchLogsClient {
+createLogGroup(params: any): Promise<any>;
+  createLogStream(params: any): Promise<any>;
+  putLogEvents(params: any): Promise<any>;
   send(command: any): Promise<any>;
 }
 
@@ -45,7 +48,7 @@ export class CloudWatchLogger {
         };
       }
 
-      this.client = new CloudWatchLogsClient(clientConfig);
+      this.client = new CloudWatchLogsClient(clientConfig) as any;
 
       // Ensure log group exists
       await this.ensureLogGroup();

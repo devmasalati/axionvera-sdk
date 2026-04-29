@@ -9,6 +9,7 @@ export {
     RpcError,
     ContractError,
     TimeoutError,
+    TransactionTimeoutError,
     InsufficientFundsError,
     InvalidSignatureError,
     SimulationError,
@@ -43,12 +44,12 @@ export type { WalletConnector } from './wallet/walletConnector';
 // Utils
 export { ConcurrencyQueue, createConcurrencyControlledClient } from './utils/concurrencyQueue';
 export { retry, createHttpClientWithRetry } from './utils/httpInterceptor';
-export { buildContractCallOperation, buildContractCallTransaction, buildBaseTransaction, toScVal } from './utils/transactionBuilder';
-export type { BuildBaseTransactionParams } from './utils/transactionBuilder';
+export { buildContractCallOperation, buildContractCallTransaction, buildBaseTransaction, bumpTransactionFee, toScVal } from './utils/transactionBuilder';
+export type { BuildBaseTransactionParams, BumpTransactionFeeOptions } from './utils/transactionBuilder';
 export { getDefaultRpcUrl, getNetworkPassphrase, resolveNetworkConfig } from './utils/networkConfig';
 export { generateTransactionURI, generatePayURI } from './utils/sep7';
 
 // Testing & MSW
-// export * from './test/msw/setup';
-// export * from './test/msw/handlers';
-// export { server } from './test/msw/server';
+export * from './test/msw/setup';
+export * from './test/msw/handlers';
+export { server } from './test/msw/server';

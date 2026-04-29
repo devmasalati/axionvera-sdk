@@ -23,7 +23,7 @@ import { Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
 export interface WalletConnector {
   /**
    * Gets the public key of the connected account.
-   * @returns The public key as a G-prefixed string
+* @returns A Promise that resolves to the public key of the connected account (G-prefixed string).
    * @example
    * ```typescript
    * const publicKey = await wallet.getPublicKey();
@@ -33,20 +33,21 @@ export interface WalletConnector {
   getPublicKey(): Promise<string>;
 
   /**
-   * Signs a transaction XDR string using the wallet's private key.
-   * @param transactionXdr - The base64-encoded transaction XDR to sign
+* Signs a transaction XDR string using the wallet's private key.
+   * * Must throw a `WalletConnectionError` if the user rejects the signature or if the connection fails.
+   * * @param transactionXdr - The base64-encoded transaction XDR to sign
    * @param networkPassphrase - The network passphrase for the transaction
-   * @returns The base64-encoded signed transaction XDR
+   * @returns A Promise that resolves to the base64-encoded signed transaction XDR
    * @example
    * ```typescript
    * const signedXdr = await wallet.signTransaction(
-   *   unsignedXdr,
-   *   "Test SDF Network ; September 2015"
+   * unsignedXdr,
+   * "Test SDF Network ; September 2015"
    * );
    * console.log("Signed transaction:", signedXdr);
    * ```
    */
-  signTransaction(transactionXdr: string, networkPassphrase: string): Promise<string>;
+  signTransaction(xdr: string, networkPassphrase: string): Promise<string>;
 }
 
 /**
@@ -116,10 +117,10 @@ export class LocalKeypairWalletConnector implements WalletConnector {
    * ```
    */
   async signTransaction(
-    transactionXdr: string,
+    xdr: string,
     networkPassphrase: string
   ): Promise<string> {
-    const tx = TransactionBuilder.fromXDR(transactionXdr, networkPassphrase);
+    const tx = TransactionBuilder.fromXDR(xdr, networkPassphrase);
     tx.sign(this.keypair);
     return tx.toXDR();
   }

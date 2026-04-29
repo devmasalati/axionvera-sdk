@@ -6,11 +6,28 @@ export type { StellarClientOptions } from './client/stellarClient';
 export type { AxionveraClientConfig } from './client/axionveraClient';
 
 // Contracts
+export { BaseContract } from './contracts/BaseContract';
+export type { BaseContractConfig, InvokeMethodOptions } from './contracts/BaseContract';
+export type { BaseContractConfig } from './contracts/BaseContract';
 export { VaultContract } from './contracts/VaultContract';
+// Strict argument interfaces for Soroban vault methods (issue #95).
+// These enforce compile-time typo detection (e.g. { amout } instead of { amount }).
+export type {
+  DepositArgs,
+  WithdrawArgs,
+  ClaimArgs,
+  ClaimRewardsParams,
+} from './contracts/VaultContract';
 export { ContractEventEmitter } from './contracts/ContractEventEmitter';
 export { Vault } from './contracts/Vault';
 export { VaultABI } from './contracts/abis/VaultABI';
-export type { VaultConfig, DepositParams, WithdrawParams, VaultInfo } from './contracts/Vault';
+// Soroban-native VaultContract config and param shapes.
+export type {
+  VaultConfig,
+  VaultInfo,
+  DepositParams,
+  WithdrawParams,
+} from './contracts/VaultContract';
 export type { ContractEvent, EventCallback } from './contracts/ContractEventEmitter';
 
 // Wallet
@@ -22,10 +39,17 @@ export type { WalletConnector } from './wallet/walletConnector';
 // Utils
 export { ConcurrencyQueue, createConcurrencyControlledClient } from './utils/concurrencyQueue';
 export { retry, createHttpClientWithRetry } from './utils/httpInterceptor';
-export { buildContractCallOperation, buildContractCallTransaction, buildContractAuthPayload, toScVal } from './utils/transactionBuilder';
+export { buildContractCallOperation, buildContractCallTransaction, buildContractAuthPayload, bumpTransactionFee, toScVal } from './utils/transactionBuilder';
+export type { BumpTransactionFeeOptions } from './utils/transactionBuilder';
 export { getDefaultRpcUrl, getNetworkPassphrase, resolveNetworkConfig } from './utils/networkConfig';
 export { generateTransactionURI, generatePayURI } from './utils/sep7';
 export { decodeXdrBase64, clearXdrCache, getXdrCacheSize } from './utils/xdrCache';
+export {
+  addAuthEntry,
+  buildSorobanAddressAuthEntry,
+  buildSorobanSourceAccountAuthEntry,
+} from './utils/sorobanAuth';
+export type { SorobanAuthEntry, BuildAddressAuthEntryParams, BuildSourceAuthEntryParams } from './utils/sorobanAuth';
 
 // Errors
 export { 
@@ -37,6 +61,7 @@ export {
   StellarRpcNetworkError,
   StellarRpcResponseError,
   StellarRpcTimeoutError,
+  TransactionTimeoutError,
   WalletNotInstalledError,
   FaucetRateLimitError,
   DeviceLockedError,
@@ -64,3 +89,8 @@ export type {
 export * from './test/msw/setup';
 export * from './test/msw/handlers';
 export { server } from './test/msw/server';
+
+// Codegen utilities (for programmatic use)
+export { parseWasm } from './codegen/wasmParser';
+export { generateContractClass } from './codegen/generator';
+export type { ContractSpec, SpecFunction, SpecParam, SpecStruct, SpecEnum } from './codegen/wasmParser';
