@@ -1,6 +1,8 @@
+import { createHash } from 'crypto';
 import {
   Account,
   Address,
+  FeeBumpTransaction,
   Contract,
   Transaction,
   TransactionBuilder,
@@ -16,7 +18,7 @@ export type ContractCallArg = xdr.ScVal | Address | string | number | bigint | b
 /**
  * Parameters for building a contract call transaction.
  */
-export type BuildContractCallParams = {
+export interface BuildContractCallParams {
   /** The source account for the transaction */
   sourceAccount: Account;
   /** The network passphrase */
@@ -31,6 +33,16 @@ export type BuildContractCallParams = {
   fee?: number;
   /** Transaction timeout in seconds (default: 60) */
   timeoutInSeconds?: number;
+}
+
+/**
+ * Options for wrapping a signed transaction in a fee bump envelope.
+ */
+export type BumpTransactionFeeOptions = {
+  /** The public key of the account sponsoring the higher fee */
+  feeSource: string;
+  /** The network passphrase used to parse and rebuild the transaction */
+  networkPassphrase: string;
 };
 
 /**
@@ -67,16 +79,18 @@ export function toScVal(arg: ContractCallArg): xdr.ScVal {
     return nativeToScVal(arg);
   }
 
-  return arg;
+  // If it's already an ScVal, return it
+  if (arg instanceof xdr.ScVal) {
+    return arg;
+  }
+
+  // Fallback
+  return nativeToScVal(arg);
 }
 
 /**
  * Builds a Soroban contract call operation.
  * @param params - The operation parameters
- * @param params.contractId - The contract ID to call
- * @param params.method - The method name to call
- * @param params.args - The arguments to pass
- * @returns The constructed operation
  */
 export function buildContractCallOperation(params: {
   contractId: string;
@@ -115,12 +129,59 @@ export function buildContractCallTransaction(
 }
 
 /**
+ * Wraps a signed transaction in an unsigned fee bump envelope.
+ *
+ * The returned XDR preserves the original user signature on the inner
+ * transaction. Only the outer fee bump envelope still needs to be signed
+ * by the sponsoring account before submission.
+ *
+ * @param signedXdr - The already-signed inner transaction XDR
+ * @param newBaseFee - The replacement base fee in stroops
+ * @param options - Fee bump configuration
+ * @returns The unsigned fee bump transaction XDR
+ */
+export function bumpTransactionFee(
+  signedXdr: string,
+  newBaseFee: number,
+  options: BumpTransactionFeeOptions
+): string {
+  if (!signedXdr) {
+    throw new Error("signedXdr is required");
+  }
+
+  if (!Number.isInteger(newBaseFee) || newBaseFee <= 0) {
+    throw new Error("newBaseFee must be a positive integer");
+  }
+
+  if (!options.feeSource) {
+    throw new Error("feeSource is required");
+  }
+
+  const innerTransaction = TransactionBuilder.fromXDR(
+    signedXdr,
+    options.networkPassphrase
+  );
+
+  if (innerTransaction instanceof FeeBumpTransaction) {
+    throw new Error("signedXdr must be a signed inner transaction, not an existing fee bump transaction");
+  }
+
+  if (innerTransaction.signatures.length === 0) {
+    throw new Error("signedXdr must include at least one signature before applying a fee bump");
+  }
+
+  return TransactionBuilder.buildFeeBumpTransaction(
+    options.feeSource,
+    newBaseFee.toString(),
+    innerTransaction,
+    options.networkPassphrase
+  ).toXDR();
+}
+
+/**
  * Builds the exact byte-hash required for Soroban's native contract authorization.
  * 
- * This handles the "CONTRACT_ID" preimage type used in require_auth mechanics,
- * which is essential for gasless transactions and sponsored contract calls.
- * 
- * @param networkPassphrase - The network passphrase (e.g., "Test SDF Network ; September 2015")
+ * @param networkPassphrase - The network passphrase
  * @param contractId - The contract ID being authorized
  * @param methodName - The method name being called
  * @param args - The arguments for the method
@@ -154,6 +215,5 @@ export function buildContractAuthPayload(
  * @returns The 32-byte hash buffer
  */
 function hash(data: Buffer): Buffer {
-  const { createHash } = require('crypto');
   return createHash('sha256').update(data).digest();
 }

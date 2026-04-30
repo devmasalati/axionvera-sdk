@@ -9,6 +9,7 @@ export {
     RpcError,
     ContractError,
     TimeoutError,
+    TransactionTimeoutError,
     InsufficientFundsError,
     InvalidSignatureError,
     SimulationError,
@@ -46,6 +47,8 @@ export { ConcurrencyQueue, createConcurrencyControlledClient } from './utils/con
 export { retry, createHttpClientWithRetry } from './utils/httpInterceptor';
 export { buildContractCallOperation, buildContractCallTransaction, buildBaseTransaction, toScVal, ContractCallBuilder } from './utils/transactionBuilder';
 export type { BuildBaseTransactionParams, BuildContractCallParams, ContractCallArg } from './utils/transactionBuilder';
+export { buildContractCallOperation, buildContractCallTransaction, buildBaseTransaction, bumpTransactionFee, toScVal } from './utils/transactionBuilder';
+export type { BuildBaseTransactionParams, BumpTransactionFeeOptions } from './utils/transactionBuilder';
 export { getDefaultRpcUrl, getNetworkPassphrase, resolveNetworkConfig } from './utils/networkConfig';
 export { generateTransactionURI, generatePayURI } from './utils/sep7';
 
