@@ -1,19 +1,20 @@
 import {
   Account,
-  Address,
-  Contract,
-  FeeBumpTransaction,
-  Keypair,
   Transaction,
   TransactionBuilder,
   rpc,
-  xdr,
   Operation
 } from "@stellar/stellar-sdk";
 
 import { StellarClient } from "../client/stellarClient";
 import { WalletConnector } from "../wallet/walletConnector";
+import { NetworkMismatchError } from "../errors/axionveraError";
 import { buildContractCallOperation, toScVal, ContractCallArg } from "../utils/transactionBuilder";
+import {
+  buildContractCallOperation,
+  bumpTransactionFee,
+  ContractCallArg
+} from "../utils/transactionBuilder";
 
 /**
  * Configuration for building and signing transactions.
@@ -154,11 +155,28 @@ export class TransactionSigner {
   }
 
   /**
+   * Validates that the wallet's network matches the client's network.
+   * @throws NetworkMismatchError if networks don't match
+   */
+  private async validateNetworks(): Promise<void> {
+    const walletNetwork = await this.wallet.getNetwork();
+    
+    if (walletNetwork !== this.client.network) {
+      throw new NetworkMismatchError(
+        `Network mismatch: Expected ${this.client.network}, but wallet is connected to ${walletNetwork}`
+      );
+    }
+  }
+
+  /**
    * Builds, simulates, signs, and submits a transaction in one operation.
    * @param params - Transaction build parameters
    * @returns The transaction result
    */
   async buildAndSignTransaction(params: TransactionBuildParams): Promise<TransactionResult> {
+    // Validate that wallet and client are on the same network
+    await this.validateNetworks();
+
     // Build the transaction
     const transaction = await this.buildTransaction(params);
 
@@ -207,8 +225,8 @@ export class TransactionSigner {
    * @returns The built transaction
    */
   async buildTransaction(params: TransactionBuildParams): Promise<Transaction> {
-    // Get account information
-    const account = await this.client.rpc.getAccount(params.sourceAccount);
+    // Get account information with cache fallback for offline resilience
+    const account = await this.client.getAccountWithCache(params.sourceAccount);
 
     // Build operations
     const operations: Operation[] = params.operations.map(op =>
@@ -260,7 +278,7 @@ export class TransactionSigner {
 
     const cpuInstructions = simulation.results?.[0]?.cpuInstructions ?? 0;
     const memoryBytes = simulation.results?.[0]?.memoryBytes ?? 0;
-    const recommendedFee = simulation.transactionData?.resourceFee ?? this.defaultFee;
+    const recommendedFee = simulation.minResourceFee ?? this.defaultFee;
 
     return {
       cpuInstructions,
@@ -277,14 +295,17 @@ export class TransactionSigner {
    * @returns The signed fee bump transaction XDR
    */
   async createFeeBumpTransaction(params: FeeBumpParams): Promise<string> {
-    // Parse the inner transaction
-    const innerTransaction = TransactionBuilder.fromXDR(
+    const feeBumpEnvelopeXdr = bumpTransactionFee(
       params.innerTransaction,
-      this.client.networkPassphrase
+      params.baseFee,
+      {
+        feeSource: params.feeSource,
+        networkPassphrase: this.client.networkPassphrase
+      }
     );
 
-    // Get fee source account
-    const feeSourceAccount = await this.client.rpc.getAccount(params.feeSource);
+// Get fee source account with cache fallback for offline resilience
+    const feeSourceAccount = await this.client.getAccountWithCache(params.feeSource);
 
     // Build the fee bump transaction
     const feeBumpTx = new FeeBumpTransaction.Builder(
@@ -297,7 +318,7 @@ export class TransactionSigner {
 
     // Sign the fee bump transaction
     return await this.wallet.signTransaction(
-      feeBumpTx.toXDR(),
+      feeBumpEnvelopeXdr,
       this.client.networkPassphrase
     );
   }

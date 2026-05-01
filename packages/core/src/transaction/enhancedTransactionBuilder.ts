@@ -291,7 +291,7 @@ export class EnhancedTransactionBuilder extends TransactionSigner {
     
     // Replace the memo if it's not a text memo
     if (memo.type !== 'text') {
-      const account = await this.client.rpc.getAccount(sourceAccount);
+      const account = await this.client.getAccountWithCache(sourceAccount);
       
       let memoObj: Memo;
       switch (memo.type) {

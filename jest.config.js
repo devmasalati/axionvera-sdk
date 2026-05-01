@@ -1,6 +1,9 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
+  transform: {
+    '^.+\\.tsx?$': ['ts-jest', { isolatedModules: true }],
+  },
   collectCoverage: true,
   collectCoverageFrom: [
     'src/**/*.ts',
@@ -15,5 +18,12 @@ module.exports = {
       lines: 85
     }
   },
+  testPathIgnorePatterns: ['/node_modules/', '/dist/'],
+  moduleNameMapper: {
+    '^react$': '<rootDir>/node_modules/react',
+    '^react-dom$': '<rootDir>/node_modules/react-dom',
+    '^react-dom/(.*)$': '<rootDir>/node_modules/react-dom/$1',
+  },
+  setupFilesAfterEnv: ['<rootDir>/tests/mocks/setup.ts'],
   testPathIgnorePatterns: ['/node_modules/', '/dist/']
 };

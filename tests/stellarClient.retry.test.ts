@@ -99,11 +99,11 @@ describe('StellarClient Retry Functionality', () => {
       const error = { response: { status: 500 } };
       mockServer.getHealth
         .mockRejectedValueOnce(error)
-        .mockResolvedValueOnce('success');
+        .mockResolvedValueOnce({ status: 'healthy' });
 
       const result = await client.getHealth();
 
-      expect(result).toBe('success');
+      expect(result.status).toBe('healthy');
       expect(mockServer.getHealth).toHaveBeenCalledTimes(2);
     });
 
@@ -147,11 +147,11 @@ describe('StellarClient Retry Functionality', () => {
       const error = { response: { status: 504 } };
       mockServer.getTransaction
         .mockRejectedValueOnce(error)
-        .mockResolvedValueOnce('success');
+        .mockResolvedValueOnce({ status: 'NOT_FOUND', latestLedger: 100 });
 
       const result = await client.getTransaction('test-hash');
 
-      expect(result).toBe('success');
+      expect(result.status).toBe('NOT_FOUND');
       expect(mockServer.getTransaction).toHaveBeenCalledTimes(2);
     });
   });
@@ -189,7 +189,7 @@ describe('StellarClient Retry Functionality', () => {
 
     it('should not retry prepareTransaction', async () => {
       const error = { response: { status: 500 } };
-      mockServer.prepareTransaction.mockRejectedValue(error);
+      mockServer.simulateTransaction.mockRejectedValue(error);
 
       let thrown: unknown;
       try {
@@ -200,7 +200,7 @@ describe('StellarClient Retry Functionality', () => {
 
       expect(thrown).toBeInstanceOf(NetworkError);
       expect(thrown).toMatchObject({ statusCode: 500 });
-      expect(mockServer.prepareTransaction).toHaveBeenCalledTimes(1);
+      expect(mockServer.simulateTransaction).toHaveBeenCalledTimes(1);
     });
 
     it('should not retry sendTransaction', async () => {

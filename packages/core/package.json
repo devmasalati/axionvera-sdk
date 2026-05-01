@@ -13,44 +13,24 @@
   ],
   "exports": {
     ".": {
-      "import": {
-        "types": "./dist/index.d.mts",
-        "default": "./dist/index.mjs"
-      },
-      "require": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      }
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
     },
     "./vault": {
-      "import": {
-        "types": "./dist/vault.d.mts",
-        "default": "./dist/vault.mjs"
-      },
-      "require": {
-        "types": "./dist/vault.d.ts",
-        "default": "./dist/vault.js"
-      }
+      "import": "./dist/vault.mjs",
+      "require": "./dist/vault.js",
+      "types": "./dist/vault.d.ts"
     },
     "./client": {
-      "import": {
-        "types": "./dist/client.d.mts",
-        "default": "./dist/client.mjs"
-      },
-      "require": {
-        "types": "./dist/client.d.ts",
-        "default": "./dist/client.js"
-      }
+      "import": "./dist/client.mjs",
+      "require": "./dist/client.js",
+      "types": "./dist/client.d.ts"
     },
     "./utils": {
-      "import": {
-        "types": "./dist/utils.d.mts",
-        "default": "./dist/utils.mjs"
-      },
-      "require": {
-        "types": "./dist/utils.d.ts",
-        "default": "./dist/utils.js"
-      }
+      "import": "./dist/utils.mjs",
+      "require": "./dist/utils.js",
+      "types": "./dist/utils.d.ts"
     },
     "./wallet": {
       "import": {
@@ -61,45 +41,79 @@
         "types": "./dist/wallet.d.ts",
         "default": "./dist/wallet.js"
       }
+    },
+    "./codegen": {
+      "import": {
+        "types": "./dist/codegen.d.mts",
+        "default": "./dist/codegen.mjs"
+      },
+      "require": {
+        "types": "./dist/codegen.d.ts",
+        "default": "./dist/codegen.js"
+      }
+    },
+    "./contracts/BaseContract": {
+      "import": {
+        "types": "./dist/contracts/BaseContract.d.mts",
+        "default": "./dist/contracts/BaseContract.mjs"
+      },
+      "require": {
+        "types": "./dist/contracts/BaseContract.d.ts",
+        "default": "./dist/contracts/BaseContract.js"
+      }
     }
+  },
+  "bin": {
+    "axionvera-cli": "./bin/axionvera-cli.js"
   },
   "scripts": {
     "clean": "rimraf dist",
     "build": "npm run clean && npx tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "node ../../node_modules/eslint/bin/eslint.js src/**/*.ts"
+    "lint": "eslint src/**/*.ts"
   },
   "sideEffects": false,
   "dependencies": {
     "@stellar/stellar-sdk": "^14.6.1",
-    "axios": "^1.7.9"
+    "axios": "^1.7.9",
+    "valibot": "^1.3.1"
   },
   "peerDependencies": {
-    "@stellar/freighter-api": "^6.0.1"
+    "@stellar/freighter-api": "^6.0.1",
+    "@ledgerhq/hw-transport-webusb": "^6.29.4",
+    "@ledgerhq/hw-app-str": "^6.27.1"
   },
   "peerDependenciesMeta": {
     "@stellar/freighter-api": {
+      "optional": true
+    },
+    "@ledgerhq/hw-transport-webusb": {
+      "optional": true
+    },
+    "@ledgerhq/hw-app-str": {
       "optional": true
     }
   },
   "devDependencies": {
     "@size-limit/preset-small-lib": "^11.1.6",
-    "size-limit": "^11.1.6",
     "@types/jest": "^29.5.12",
     "@types/node": "^22.13.5",
-    "@typescript-eslint/eslint-plugin": "^7.0.0",
-    "@typescript-eslint/parser": "^7.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.24.1",
+    "@typescript-eslint/parser": "^8.24.1",
     "benchmark": "^2.1.4",
     "eslint": "^8.57.0",
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0",
     "msw": "^1.3.5",
     "rimraf": "^6.0.1",
-    "tsup": "^8.3.6",
+    "size-limit": "^11.1.6",
     "ts-jest": "^29.2.5",
+    "tsup": "^8.3.6",
     "typedoc": "^0.28.18",
     "typedoc-plugin-markdown": "^4.11.0",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "@ledgerhq/hw-transport-webusb": "^6.29.4",
+    "@ledgerhq/hw-app-str": "^6.27.1"
   },
   "publishConfig": {
     "access": "public",

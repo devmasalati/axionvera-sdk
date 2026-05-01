@@ -3,30 +3,30 @@ import { VaultABI } from './abis/VaultABI';
 
 export interface VaultConfig {
   contractAddress: string;
-  provider: ethers.providers.Provider | ethers.Signer;
+  provider: ethers.Provider | ethers.Signer;
 }
 
 export interface DepositParams {
-  amount: ethers.BigNumberish;
+  amount: bigint;
   asset?: string;
   referralCode?: string;
 }
 
 export interface WithdrawParams {
-  amount: ethers.BigNumberish;
+  amount: bigint;
   asset?: string;
 }
 
 export interface VaultInfo {
-  totalAssets: ethers.BigNumber;
-  totalSupply: ethers.BigNumber;
+  totalAssets: bigint;
+  totalSupply: bigint;
   apy: number;
   lockPeriod: number;
 }
 
 export class Vault {
   private contract: ethers.Contract;
-  private provider: ethers.providers.Provider | ethers.Signer;
+  private provider: ethers.Provider | ethers.Signer;
   private address: string;
 
   constructor(config: VaultConfig) {
@@ -61,10 +61,10 @@ export class Vault {
     ]);
 
     return {
-      totalAssets,
-      totalSupply,
-      apy: apy.toNumber() / 10000,
-      lockPeriod: lockPeriod.toNumber(),
+      totalAssets: BigInt(totalAssets.toString()),
+      totalSupply: BigInt(totalSupply.toString()),
+      apy: Number(apy) / 10000,
+      lockPeriod: Number(lockPeriod),
     };
   }
 
@@ -73,8 +73,9 @@ export class Vault {
    * @param userAddress - Address of the user
    * @returns User's balance in vault shares
    */
-  async getBalance(userAddress: string): Promise<ethers.BigNumber> {
-    return this.contract.balanceOf(userAddress);
+  async getBalance(userAddress: string): Promise<bigint> {
+    const balance = await this.contract.balanceOf(userAddress);
+    return BigInt(balance.toString());
   }
 
   /**
@@ -82,7 +83,7 @@ export class Vault {
    * @param userAddress - Address of the user
    * @returns Converted balance in underlying asset
    */
-  async getAssetsBalance(userAddress: string): Promise<ethers.BigNumber> {
+  async getAssetsBalance(userAddress: string): Promise<bigint> {
     const shares = await this.getBalance(userAddress);
     return this.convertToAssets(shares);
   }
@@ -90,15 +91,17 @@ export class Vault {
   /**
    * Convert shares to underlying assets
    */
-  async convertToAssets(shares: ethers.BigNumberish): Promise<ethers.BigNumber> {
-    return this.contract.convertToAssets(shares);
+  async convertToAssets(shares: bigint): Promise<bigint> {
+    const result = await this.contract.convertToAssets(shares);
+    return BigInt(result.toString());
   }
 
   /**
    * Convert underlying assets to shares
    */
-  async convertToShares(assets: ethers.BigNumberish): Promise<ethers.BigNumber> {
-    return this.contract.convertToShares(assets);
+  async convertToShares(assets: bigint): Promise<bigint> {
+    const result = await this.contract.convertToShares(assets);
+    return BigInt(result.toString());
   }
 
   /**
@@ -114,7 +117,8 @@ export class Vault {
     }
 
     const contractWithSigner = this.contract.connect(signerToUse);
-    const tx = await contractWithSigner.deposit(params.amount, {
+    const depositFunc = this.contract.getFunction('deposit');
+    const tx = await depositFunc(params.amount, {
       value: params.amount,
     });
     
@@ -134,7 +138,8 @@ export class Vault {
     }
 
     const contractWithSigner = this.contract.connect(signerToUse);
-    const tx = await contractWithSigner.withdraw(
+    const withdrawFunc = this.contract.getFunction('withdraw');
+    const tx = await withdrawFunc(
       params.amount,
       await signerToUse.getAddress(),
       await signerToUse.getAddress()
@@ -155,7 +160,8 @@ export class Vault {
     }
 
     const contractWithSigner = this.contract.connect(signerToUse);
-    const tx = await contractWithSigner.claimRewards();
+    const claimRewardsFunc = this.contract.getFunction('claimRewards');
+    const tx = await claimRewardsFunc();
     
     return tx;
   }
@@ -164,22 +170,27 @@ export class Vault {
    * Get pending rewards for a user
    * @param userAddress - Address of the user
    */
-  async getPendingRewards(userAddress: string): Promise<ethers.BigNumber> {
-    return this.contract.pendingRewards(userAddress);
+  async getPendingRewards(userAddress: string): Promise<bigint> {
+    const rewards = await this.contract.pendingRewards(userAddress);
+    return BigInt(rewards.toString());
   }
 
   /**
    * Estimate deposit gas cost
    */
-  async estimateDepositGas(amount: ethers.BigNumberish): Promise<ethers.BigNumber> {
-    return this.contract.estimateGas.deposit(amount);
+  async estimateDepositGas(amount: bigint): Promise<bigint> {
+    const depositFunc = this.contract.getFunction('deposit');
+    const gas = await depositFunc.estimateGas(amount);
+    return BigInt(gas.toString());
   }
 
   /**
    * Estimate withdraw gas cost
    */
-  async estimateWithdrawGas(amount: ethers.BigNumberish): Promise<ethers.BigNumber> {
-    return this.contract.estimateGas.withdraw(amount);
+  async estimateWithdrawGas(amount: bigint): Promise<bigint> {
+    const withdrawFunc = this.contract.getFunction('withdraw');
+    const gas = await withdrawFunc.estimateGas(amount);
+    return BigInt(gas.toString());
   }
 }
 

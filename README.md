@@ -138,6 +138,26 @@ run();
 
 ---
 
+## 🌐 Quick Start (Browser)
+
+Try the SDK in your browser without any local setup using our interactive playground:
+
+[![Open in StackBlitz](https://stackblitz.com/github/Listoncrypt/axionvera-sdk/badge.svg)](https://stackblitz.com/github/Listoncrypt/axionvera-sdk?file=examples/browser-sandbox/index.ts)
+
+The browser sandbox uses the `MockWalletConnector` to demonstrate SDK initialization and wallet connection flows without requiring a real wallet extension. This is perfect for:
+- Quick prototyping and testing
+- Understanding the SDK API
+- Demonstrating the SDK to stakeholders
+
+To run the sandbox locally:
+```bash
+cd examples/browser-sandbox
+npm install
+npm run dev
+```
+
+---
+
 ## � Migration Guide
 
 **Coming from Stellar Classic (stellar-sdk v10)?** 
@@ -161,6 +181,36 @@ We provide detailed, runnable examples in the [`examples/`](./examples/) directo
 - 🏦 **Withdraw**: [withdrawExample.ts](./examples/withdrawExample.ts)
 - ⚖️ **Check Balance**: [balanceExample.ts](./examples/balanceExample.ts)
 - 🔄 **HTTP Retry Logic**: [retryExample.ts](./examples/retryExample.ts)
+
+### Recover a Stuck Transaction with a Fee Bump
+
+When a signed transaction is still pending and the network fee market moves, you can wrap the original signed XDR in a fee bump envelope instead of asking the user to re-sign the contract call.
+
+```typescript
+import { Keypair, Networks } from "@stellar/stellar-sdk";
+import {
+  LocalKeypairWalletConnector,
+  bumpTransactionFee
+} from "axionvera-sdk";
+
+const sponsorWallet = new LocalKeypairWalletConnector(
+  Keypair.fromSecret(process.env.SPONSOR_SECRET_KEY!)
+);
+
+const feeBumpEnvelopeXdr = bumpTransactionFee(userSignedXdr, 500, {
+  feeSource: await sponsorWallet.getPublicKey(),
+  networkPassphrase: Networks.TESTNET
+});
+
+const sponsorSignedXdr = await sponsorWallet.signTransaction(
+  feeBumpEnvelopeXdr,
+  Networks.TESTNET
+);
+
+await client.sendTransaction(sponsorSignedXdr);
+```
+
+This preserves the original user signature on the inner transaction. Only the outer fee bump envelope is signed by the sponsor wallet.
 
 ---
 
@@ -210,6 +260,8 @@ A high-level abstraction for the Axionvera Vault smart contract.
 - `deposit({ amount, from })`: Deposits tokens into the vault.
 - `withdraw({ amount, from })`: Withdraws tokens from the vault.
 - `getBalance({ account })`: Retrieves the vault balance for a specific account.
+- `getVaultShares({ account })`: Queries the user's balance of the Vault's share token (read-only).
+- `getExchangeRate()`: Queries the current conversion rate between 1 Share and the underlying asset (read-only).
 - `claimRewards({ from })`: Claims pending rewards for the caller.
 
 ### `FaucetClient`
@@ -220,6 +272,7 @@ Automated funding for Testnet and Futurenet.
 Standardized URI generation for mobile wallet integration.
 - `generateTransactionURI(xdr, callbackUrl)`: Generates a `web+stellar:tx` URI.
 - `generatePayURI(destination, amount, assetCode, assetIssuer)`: Generates a `web+stellar:pay` URI.
+- `bumpTransactionFee(signedXdr, newBaseFee, options)`: Wraps a signed transaction XDR in an unsigned fee bump envelope for sponsor signing.
 
 ### `WalletConnector` (Interface)
 Implement this interface to integrate browser extension wallets (like Freighter) or use the provided `LocalKeypairWalletConnector` for backend/scripting services.
