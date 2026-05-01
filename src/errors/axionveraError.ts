@@ -53,15 +53,44 @@ export class ContractError extends AxionveraError { }
 
 export class TimeoutError extends AxionveraError { }
 
+export class TransactionTimeoutError extends TimeoutError { }
+
 export class InsufficientFundsError extends AxionveraError { }
 
 export class InvalidSignatureError extends AxionveraError { }
+
+/**
+ * Thrown when a consumer-provided XDR string fails sanitization.
+ *
+ * This error is raised before the underlying @stellar/stellar-sdk parser is
+ * ever invoked, so no unhandled Buffer allocation panics can reach the caller.
+ *
+ * @example
+ * ```typescript
+ * import { assertValidXDR } from 'axionvera-sdk';
+ * // Throws InvalidXDRError for any non-base64 or oversized input
+ * assertValidXDR(userSuppliedXdr);
+ * ```
+ */
+export class InvalidXDRError extends AxionveraError {
+  /** The (possibly truncated) input that failed validation. */
+  readonly input: string;
+
+  constructor(message: string, input: string, options: AxionveraErrorOptions = {}) {
+    super(message, options);
+    this.name = 'InvalidXDRError';
+    // Avoid leaking huge strings in the error object — keep at most 64 chars.
+    this.input = input.length > 64 ? `${input.slice(0, 64)}…` : input;
+  }
+}
 
 export class SimulationError extends AxionveraError { }
 
 export class WalletNotInstalledError extends AxionveraError { }
 
 export class FaucetRateLimitError extends AxionveraError { }
+
+export class NetworkMismatchError extends AxionveraError { }
 
 export class InsecureNetworkError extends AxionveraError { }
 
@@ -85,6 +114,29 @@ export class SimulationFailedError extends AxionveraError {
   }
 }
 
+export class SlippageToleranceExceededError extends AxionveraError {
+  readonly expected: bigint;
+  readonly actual: bigint;
+  readonly tolerance: bigint;
+
+  constructor(
+    expected: bigint,
+    actual: bigint,
+    tolerance: bigint,
+    options: AxionveraErrorOptions = {}
+  ) {
+    super(
+      `Slippage tolerance exceeded: expected at least ${expected} shares, ` +
+      `but simulation returned ${actual}. Tolerance was ${tolerance}.`,
+      options
+    );
+    this.name = 'SlippageToleranceExceededError';
+    this.expected = expected;
+    this.actual = actual;
+    this.tolerance = tolerance;
+  }
+}
+
 export class WalletConnectionError extends AxionveraError {
   readonly walletType?: string;
 
@@ -92,6 +144,22 @@ export class WalletConnectionError extends AxionveraError {
     super(message, options);
     this.name = 'WalletConnectionError';
     this.walletType = options.walletType;
+  }
+}
+
+export type RPCValidationMismatchErrorOptions = AxionveraErrorOptions & {
+  rpcMethod: string;
+  receivedShape: unknown;
+};
+
+export class RPCValidationMismatchError extends AxionveraError {
+  readonly rpcMethod: string;
+  readonly receivedShape: unknown;
+
+  constructor(message: string, options: RPCValidationMismatchErrorOptions) {
+    super(message, options);
+    this.rpcMethod = options.rpcMethod;
+    this.receivedShape = options.receivedShape;
   }
 }
 

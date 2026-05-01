@@ -1,4 +1,10 @@
 export type LogLevel = 'none' | 'error' | 'warn' | 'info' | 'debug';
+export interface CustomLogger {
+  info(message: string, ...args: any[]): void;
+  warn(message: string, ...args: any[]): void;
+  error(message: string, ...args: any[]): void;
+  debug(message: string, ...args: any[]): void;
+}
 
 import { CloudWatchLogger, CloudWatchConfig, LogEntry } from './logging/cloudwatch';
 
@@ -17,9 +23,11 @@ const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
 export class Logger {
   private level: LogLevel;
   private cloudWatchLogger: CloudWatchLogger | null = null;
+  private customLogger: CustomLogger | null = null;
 
-  constructor(level: LogLevel = 'none', cloudWatchConfig?: CloudWatchConfig) {
+  constructor(level: LogLevel = 'none', cloudWatchConfig?: CloudWatchConfig, customLogger?: CustomLogger) {
     this.level = level;
+    this.customLogger = customLogger || null;
     
     // Initialize CloudWatch logger if config is provided
     if (cloudWatchConfig) {
@@ -37,12 +45,11 @@ export class Logger {
    */
   private redact(message: any): any {
     const sensitiveKeys = [
-      'authorization', 'api-key', 'apikey',
-      'secret', 'secretkey', 'secret_key', 'secretaccesskey',
-      'passphrase', 'networkpassphrase',
+      'authorization', 'api-key', 'apikey', 'api_key', 'x-api-key', 'x_api_key',
+      'secret', 'secretkey', 'secret_key', 'secretaccesskey', 'secret_access_key',
+      'passphrase', 'networkpassphrase', 'network_passphrase',
       'password',
       'token',
-      'x-api-key',
       'privatekey', 'private_key',
     ];
 
@@ -52,7 +59,7 @@ export class Logger {
     if (typeof message === 'string') {
       let redacted = message
         .replace(/Bearer\s+[a-zA-Z0-9\-\._~+/]+=*/gi, 'Bearer [REDACTED]')
-        .replace(/(api[_-]?key|secret[_-]?key|password|token|private[_-]?key)["']?\s*[:=]\s*["']?([a-zA-Z0-9\-_.]+)["']?/gi, '$1: [REDACTED]');
+        .replace(/(api[_-]?key|secret[_-]?key|key|password|token|private[_-]?key)["']?\s*[:=]\s*["']?([a-zA-Z0-9\-_.]+)["']?/gi, '$1: [REDACTED]');
 
       // Truncate suspiciously large base64/XDR blobs to avoid log bloat
       if (redacted.length > XDR_TRUNCATE_LENGTH && /^[A-Za-z0-9+/=]+$/.test(redacted.trim())) {
@@ -127,7 +134,11 @@ export class Logger {
       const redactedMessage = this.redact(message);
       const redactedArgs = args.map((a) => this.redact(a));
       
-      console[consoleLevel](`[Axionvera][${logLevel}] ${redactedMessage}`, ...redactedArgs);
+      if (this.customLogger) {
+        this.customLogger[consoleLevel](redactedMessage, ...redactedArgs);
+      } else {
+        console[consoleLevel](`[Axionvera][${logLevel}] ${redactedMessage}`, ...redactedArgs);
+      }
       
       // Send to CloudWatch asynchronously
       this.sendToCloudWatch(logLevel, message, args.length > 0 ? args : undefined).catch(() => {});
@@ -148,6 +159,62 @@ export class Logger {
 
   debug(message: string, ...args: any[]): void {
     this.logWithCloudWatch('debug', 'DEBUG', message, ...args);
+  }
+
+  /**
+   * When logLevel is 'debug', parses a transaction XDR and logs a structured
+   * JSON breakdown (sourceAccount, fee, operations) instead of the raw base64
+   * blob. Wrapped in try/catch so a parse failure never blocks execution.
+   *
+   * @param label            - Human-readable label for the XDR (e.g. "deposit tx")
+   * @param xdrString        - Base64-encoded transaction envelope XDR
+   * @param networkPassphrase - The network passphrase used to build the transaction
+   */
+  debugXdr(label: string, xdrString: string, networkPassphrase?: string): void {
+    if (!this.shouldLog('debug')) return;
+
+    try {
+      // Dynamic require keeps stellar-sdk out of the logger's static dependency graph.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { TransactionBuilder } = require('@stellar/stellar-sdk');
+
+      const candidates: string[] = networkPassphrase
+        ? [networkPassphrase]
+        : [
+            'Test SDF Network ; September 2015',
+            'Public Global Stellar Network ; September 2015',
+            'Standalone Network ; February 2017',
+          ];
+
+      let tx: any;
+      for (const passphrase of candidates) {
+        try {
+          tx = TransactionBuilder.fromXDR(xdrString, passphrase);
+          break;
+        } catch {
+          // try next passphrase
+        }
+      }
+
+      if (!tx) {
+        this.debug(`[XDR: ${label}] Unable to parse — unknown network passphrase`);
+        return;
+      }
+
+      const breakdown = {
+        sourceAccount: tx.source,
+        fee: tx.fee,
+        operations: (tx.operations as any[]).map((op: any) => ({
+          type: op.type,
+          ...(op.contractId !== undefined && { contractId: op.contractId }),
+          ...(op.func !== undefined && { func: String(op.func) }),
+        })),
+      };
+
+      this.debug(`[XDR: ${label}]`, breakdown);
+    } catch {
+      // Never block main execution thread if XDR parsing fails.
+    }
   }
 
   /**

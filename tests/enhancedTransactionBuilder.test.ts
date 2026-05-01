@@ -51,7 +51,7 @@ describe('EnhancedTransactionBuilder', () => {
           { cpuInstructions: 50000, memoryBytes: 500 },
           { cpuInstructions: 75000, memoryBytes: 750 }
         ],
-        transactionData: { resourceFee: 100000 },
+        minResourceFee: 100000,
         error: undefined
       };
 
@@ -96,7 +96,7 @@ describe('EnhancedTransactionBuilder', () => {
       
       const mockSimulation = {
         results: [],
-        transactionData: { resourceFee: 0 },
+        minResourceFee: 0,
         error: undefined
       };
 
@@ -134,7 +134,7 @@ describe('EnhancedTransactionBuilder', () => {
       
       const mockSimulation = {
         results: [{ cpuInstructions: 50000, memoryBytes: 500 }],
-        transactionData: { resourceFee: 50000 },
+        minResourceFee: 50000,
         error: undefined
       };
 
@@ -210,7 +210,7 @@ describe('EnhancedTransactionBuilder', () => {
       
       const mockSimulation = {
         results: [{ cpuInstructions: 50000, memoryBytes: 500 }],
-        transactionData: { resourceFee: 50000 },
+        minResourceFee: 50000,
         error: undefined
       };
 
@@ -256,7 +256,7 @@ describe('EnhancedTransactionBuilder', () => {
 
       const mockSimulation = {
         results: [{ cpuInstructions: 50000, memoryBytes: 500 }],
-        transactionData: { resourceFee: 50000 },
+        minResourceFee: 50000,
         error: undefined
       };
 
@@ -298,7 +298,7 @@ describe('EnhancedTransactionBuilder', () => {
       
       const mockSimulation = {
         results: [{ cpuInstructions: 50000, memoryBytes: 500 }],
-        transactionData: { resourceFee: 50000 },
+        minResourceFee: 50000,
         error: undefined
       };
 

@@ -1,0 +1,2 @@
+export { LocalKeypairWalletConnector } from './walletConnector';
+
