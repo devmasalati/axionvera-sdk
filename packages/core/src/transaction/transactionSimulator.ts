@@ -115,7 +115,7 @@ export class TransactionSimulator {
 
     const totalCpu = perOperation.reduce((sum, op) => sum + op.cpuInstructions, 0);
     const totalMemory = perOperation.reduce((sum, op) => sum + op.memoryBytes, 0);
-    const resourceFee = basicSimulation.transactionData?.resourceFee || 0;
+    const resourceFee = basicSimulation.minResourceFee || 0;
     const baseFee = parseInt(transaction.fee);
 
     // Calculate efficiency metrics

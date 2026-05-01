@@ -214,7 +214,7 @@ const transaction = new TransactionBuilder(account, {
 // Complex fee structure: base fee + resource fee
 // Resource fee depends on CPU instructions and memory used
 const simulation = await client.simulateTransaction(tx);
-const resourceFee = simulation.transactionData.resourceFee; // Calculated from usage
+const resourceFee = simulation.minResourceFee; // Calculated from usage
 const totalFee = baseFee + resourceFee;
 ```
 

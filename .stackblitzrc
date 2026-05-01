@@ -1,0 +1,4 @@
+{
+  "installCommand": "npm install",
+  "startCommand": "cd examples/browser-sandbox && npm install && npm run dev"
+}

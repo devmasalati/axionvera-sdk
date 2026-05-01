@@ -1,7 +1,7 @@
 {
   "name": "@axionvera/react",
   "version": "1.0.0",
-  "description": "React hooks for Axionvera SDK.",
+  "description": "React provider and hooks for the Axionvera SDK.",
   "license": "MIT",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -27,23 +27,28 @@
     "clean": "rimraf dist",
     "build": "npm run clean && npx tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "node ../../node_modules/eslint/bin/eslint.js src/**/*.ts"
+    "lint": "eslint src/**/*.ts"
   },
   "sideEffects": false,
   "peerDependencies": {
+    "@axionvera/core": "*",
+    "@stellar/freighter-api": "^6.0.1",
     "react": ">=16.8.0"
   },
-  "dependencies": {
-    "@axionvera/core": "*"
+  "peerDependenciesMeta": {
+    "@stellar/freighter-api": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@axionvera/core": "*",
     "@size-limit/preset-small-lib": "^11.1.6",
     "size-limit": "^11.1.6",
     "@types/jest": "^29.5.12",
     "@types/node": "^22.13.5",
     "@types/react": "^18.2.0",
-    "@typescript-eslint/eslint-plugin": "^7.0.0",
-    "@typescript-eslint/parser": "^7.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.24.1",
+    "@typescript-eslint/parser": "^8.24.1",
     "eslint": "^8.57.0",
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0",
