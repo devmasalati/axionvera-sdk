@@ -1,7 +1,7 @@
 {
   "name": "@axionvera/react",
   "version": "1.0.0",
-  "description": "React hooks for Axionvera SDK.",
+  "description": "React provider and hooks for the Axionvera SDK.",
   "license": "MIT",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -31,12 +31,17 @@
   },
   "sideEffects": false,
   "peerDependencies": {
+    "@axionvera/core": "*",
+    "@stellar/freighter-api": "^6.0.1",
     "react": ">=16.8.0"
   },
-  "dependencies": {
-    "@axionvera/core": "*"
+  "peerDependenciesMeta": {
+    "@stellar/freighter-api": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@axionvera/core": "*",
     "@size-limit/preset-small-lib": "^11.1.6",
     "size-limit": "^11.1.6",
     "@types/jest": "^29.5.12",

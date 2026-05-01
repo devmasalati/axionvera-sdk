@@ -1,7 +1,18 @@
-import { createHash } from 'crypto';
+// Node.js core module imports
+// Note: In React Native, these must be polyfilled. See REACT_NATIVE.md for instructions.
+let createHash: any;
+try {
+  // Use dynamic require to prevent instant crash on some bundlers
+  // if 'crypto' is not available at load time.
+  createHash = require('crypto').createHash;
+} catch (e) {
+  // Fallback will be handled in the hash() function
+}
+
 import {
   Account,
   Address,
+  FeeBumpTransaction,
   Contract,
   Transaction,
   TransactionBuilder,
@@ -33,6 +44,16 @@ export interface BuildContractCallParams {
   /** Transaction timeout in seconds (default: 60) */
   timeoutInSeconds?: number;
 }
+
+/**
+ * Options for wrapping a signed transaction in a fee bump envelope.
+ */
+export type BumpTransactionFeeOptions = {
+  /** The public key of the account sponsoring the higher fee */
+  feeSource: string;
+  /** The network passphrase used to parse and rebuild the transaction */
+  networkPassphrase: string;
+};
 
 /**
  * Converts a value to an ScVal for contract interactions.
@@ -118,6 +139,56 @@ export function buildContractCallTransaction(
 }
 
 /**
+ * Wraps a signed transaction in an unsigned fee bump envelope.
+ *
+ * The returned XDR preserves the original user signature on the inner
+ * transaction. Only the outer fee bump envelope still needs to be signed
+ * by the sponsoring account before submission.
+ *
+ * @param signedXdr - The already-signed inner transaction XDR
+ * @param newBaseFee - The replacement base fee in stroops
+ * @param options - Fee bump configuration
+ * @returns The unsigned fee bump transaction XDR
+ */
+export function bumpTransactionFee(
+  signedXdr: string,
+  newBaseFee: number,
+  options: BumpTransactionFeeOptions
+): string {
+  if (!signedXdr) {
+    throw new Error("signedXdr is required");
+  }
+
+  if (!Number.isInteger(newBaseFee) || newBaseFee <= 0) {
+    throw new Error("newBaseFee must be a positive integer");
+  }
+
+  if (!options.feeSource) {
+    throw new Error("feeSource is required");
+  }
+
+  const innerTransaction = TransactionBuilder.fromXDR(
+    signedXdr,
+    options.networkPassphrase
+  );
+
+  if (innerTransaction instanceof FeeBumpTransaction) {
+    throw new Error("signedXdr must be a signed inner transaction, not an existing fee bump transaction");
+  }
+
+  if (innerTransaction.signatures.length === 0) {
+    throw new Error("signedXdr must include at least one signature before applying a fee bump");
+  }
+
+  return TransactionBuilder.buildFeeBumpTransaction(
+    options.feeSource,
+    newBaseFee.toString(),
+    innerTransaction,
+    options.networkPassphrase
+  ).toXDR();
+}
+
+/**
  * Builds the exact byte-hash required for Soroban's native contract authorization.
  * 
  * @param networkPassphrase - The network passphrase
@@ -154,5 +225,18 @@ export function buildContractAuthPayload(
  * @returns The 32-byte hash buffer
  */
 function hash(data: Buffer): Buffer {
-  return createHash('sha256').update(data).digest();
+  if (typeof createHash === 'function') {
+    return createHash('sha256').update(data).digest();
+  }
+  
+  // Fallback for environments where crypto might be global but not requireable
+  if (typeof global !== 'undefined' && (global as any).crypto && (global as any).crypto.createHash) {
+    return (global as any).crypto.createHash('sha256').update(data).digest();
+  }
+
+  throw new Error(
+    "Crypto implementation not found. If you are using React Native, " +
+    "please follow the polyfill instructions in REACT_NATIVE.md to enable Node.js core modules."
+  );
 }
+

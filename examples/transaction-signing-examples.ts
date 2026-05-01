@@ -49,7 +49,7 @@ async function basicTransactionExample() {
     console.log(`✅ Transaction successful!`);
     console.log(`   Hash: ${result.hash}`);
     console.log(`   Status: ${result.status}`);
-    console.log(`   Fee: ${result.simulation?.transactionData?.resourceFee || 'N/A'}`);
+    console.log(`   Fee: ${result.simulation?.minResourceFee || 'N/A'}`);
     
   } catch (error) {
     console.error(`❌ Transaction failed: ${error.message}`);
@@ -301,7 +301,7 @@ async function multiStepTransactionExample() {
     console.log(`🔄 Multi-step transaction successful!`);
     console.log(`   Hash: ${result.hash}`);
     console.log(`   Operations: 3`);
-    console.log(`   Total fee: ${result.simulation?.transactionData?.resourceFee || 'N/A'}`);
+    console.log(`   Total fee: ${result.simulation?.minResourceFee || 'N/A'}`);
     
   } catch (error) {
     console.error(`❌ Multi-step transaction failed: ${error.message}`);

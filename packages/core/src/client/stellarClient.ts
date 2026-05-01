@@ -5,7 +5,9 @@ import {
   FeeBumpTransaction,
   Keypair,
   nativeToScVal,
+  scValToNative,
   rpc,
+  SorobanDataBuilder,
   Transaction,
   TransactionBuilder,
   xdr
@@ -18,7 +20,7 @@ import {
 } from "../utils/networkConfig";
 import { ConcurrencyConfig, DEFAULT_CONCURRENCY_CONFIG, createConcurrencyControlledClient } from "../utils/concurrencyQueue";
 import { RetryConfig, createHttpClientWithRetry, retry } from "../utils/httpInterceptor";
-import { NetworkError, toAxionveraError, InsecureNetworkError, AxionveraError } from "../errors/axionveraError";
+import { NetworkError, toAxionveraError, InsecureNetworkError, AxionveraError, TransactionTimeoutError, ValidationError } from "../errors/axionveraError";
 import { LogLevel, Logger } from "../utils/logger";
 import { WebSocketManager, EventFilter, SorobanEvent, WebSocketConfig } from "./websocket";
 import { CloudWatchConfig } from "../utils/logging/cloudwatch";
@@ -29,6 +31,8 @@ import {
   sortByTimestamp,
   filterByActionType
 } from "../utils/transactionHistory";
+
+const DEFAULT_FEE_BUFFER_MULTIPLIER = 1.15;
 
 /**
  * Checks if a URL points to a localhost address.
@@ -57,7 +61,15 @@ export type StellarClientOptions = {
   webSocketConfig?: WebSocketConfig;
   cloudWatchConfig?: CloudWatchConfig;
   customHeaders?: Record<string, string>;
+  /** Multiplier applied to simulated Soroban resources and fees (default: 1.15). */
+  feeBufferMultiplier?: number;
+  /** Hard ceiling for the total prepared fee in stroops. */
+  maxFeeLimit?: number;
   allowHttp?: boolean;
+  /** Timeout in milliseconds for account fetching (default: 2000) */
+  accountFetchTimeoutMs?: number;
+  /** TTL in milliseconds for cached account sequence (default: 5000) */
+  cacheTtlMs?: number;
 };
 
 export type TransactionSendResult = {
@@ -174,6 +186,12 @@ function thawContext(ctx: SimulationContext | undefined): SimulationContext | un
   if (!ctx) return undefined;
   return thawDates(ctx) as SimulationContext;
 }
+type TransactionResponseRecord = Record<string, unknown>;
+
+export type TransactionPollResult = TransactionResponseRecord & {
+  status: string;
+  ledger: number | null;
+};
 
 /**
  * RPC gateway for interacting with Soroban networks.
@@ -216,6 +234,17 @@ export class StellarClient extends BaseStellarRpcClient {
   private webSocketManager: WebSocketManager | null = null;
   /** In-memory registry of currently polling transactions. */
   private readonly pendingTransactions = new Map<string, TrackedTransaction>();
+/** Timeout for account fetching in milliseconds. */
+  readonly accountFetchTimeoutMs: number;
+  /** TTL for cached account sequence in milliseconds. */
+  readonly cacheTtlMs: number;
+
+  /** Private cache for account sequences with timestamps. */
+  private accountSequenceCache: Map<string, { sequence: bigint; timestamp: number }>;
+  /** Multiplier applied to simulated Soroban resources and fees. */
+  private readonly feeBufferMultiplier: number;
+  /** Optional hard ceiling for the total prepared fee. */
+  private readonly maxFeeLimit?: bigint;
 
    /**
     * Creates a new StellarClient instance.
@@ -260,6 +289,22 @@ export class StellarClient extends BaseStellarRpcClient {
     this.retryConfig = options?.retryConfig ?? {};
     this.httpClient = createHttpClientWithRetry(this.retryConfig);
     this.logger = new Logger(options?.logLevel ?? 'none', options?.cloudWatchConfig);
+this.accountFetchTimeoutMs = options?.accountFetchTimeoutMs ?? 2000;
+    this.cacheTtlMs = options?.cacheTtlMs ?? 5000;
+    this.accountSequenceCache = new Map();
+    this.feeBufferMultiplier = options?.feeBufferMultiplier ?? DEFAULT_FEE_BUFFER_MULTIPLIER;
+
+    if (!Number.isFinite(this.feeBufferMultiplier) || this.feeBufferMultiplier < 1) {
+      throw new ValidationError("feeBufferMultiplier must be a finite number greater than or equal to 1");
+    }
+
+    if (options?.maxFeeLimit !== undefined) {
+      if (!Number.isInteger(options.maxFeeLimit) || options.maxFeeLimit <= 0) {
+        throw new ValidationError("maxFeeLimit must be a positive integer");
+      }
+
+      this.maxFeeLimit = BigInt(options.maxFeeLimit);
+    }
 
     this.logger.info(`Initializing StellarClient for ${this.network} at ${this.rpcUrl}`);
 
@@ -341,6 +386,291 @@ export class StellarClient extends BaseStellarRpcClient {
       () => retry(() => this.rpc.getAccount(publicKey), this.retryConfig),
       `Failed to fetch account ${publicKey}`
     );
+  }
+
+  /**
+   * Retrieves an account's information with aggressive timeout and cached fallback.
+   * If the network request fails or times out, returns an account with cached sequence + 1.
+   * @param publicKey - The account's public key
+   * @returns The account information
+   * @throws Error if both network request fails and no valid cache exists
+   */
+  async getAccountWithCache(publicKey: string): Promise<Account> {
+    try {
+      // Try to fetch account with aggressive timeout
+      const account = await this.getAccountWithTimeout(publicKey, this.accountFetchTimeoutMs);
+      // Update cache on successful fetch
+      this.updateCache(publicKey, account.sequenceNumber().toString());
+      return account;
+    } catch (error) {
+      // Network failed, try to use cached sequence
+      const cached = this.getCachedSequence(publicKey);
+      if (cached) {
+        this.logger.debug(`Using cached sequence for ${publicKey}: ${cached.sequence}`);
+        // Increment the cached sequence for sequential offline support
+        const newSequence = cached.sequence + 1n;
+        // Update cache with the new incremented value
+        this.updateCache(publicKey, newSequence.toString());
+        // Create account with the incremented sequence
+        return new Account(publicKey, newSequence.toString());
+      }
+      // No cache available, throw error
+      throw new AxionveraError(
+        `Failed to fetch account and no valid cache available for ${publicKey}`,
+        { originalError: error }
+      );
+    }
+  }
+
+  /**
+   * Fetches account with a timeout.
+   * @param publicKey - The account's public key
+   * @param timeoutMs - Timeout in milliseconds
+   * @returns The account information
+   */
+  private async getAccountWithTimeout(publicKey: string, timeoutMs: number): Promise<Account> {
+    return Promise.race([
+      this.getAccount(publicKey),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Account fetch timeout after ${timeoutMs}ms`)), timeoutMs)
+      )
+    ]);
+  }
+
+  /**
+   * Updates the cache with the current account sequence.
+   * @param publicKey - The account's public key
+   * @param sequence - The current sequence number
+   */
+  private updateCache(publicKey: string, sequence: string): void {
+    this.accountSequenceCache.set(publicKey, {
+      sequence: BigInt(sequence),
+      timestamp: Date.now()
+    });
+  }
+
+  /**
+   * Retrieves a cached sequence if it's still valid (within TTL).
+   * @param publicKey - The account's public key
+   * @returns The cached sequence info or undefined if invalid
+   */
+  private getCachedSequence(publicKey: string): { sequence: bigint; timestamp: number } | undefined {
+    const cached = this.accountSequenceCache.get(publicKey);
+    if (!cached) return undefined;
+
+    const now = Date.now();
+    if (now - cached.timestamp > this.cacheTtlMs) {
+      // Cache expired
+      this.accountSequenceCache.delete(publicKey);
+      return undefined;
+    }
+
+    return cached;
+  }
+
+  /**
+   * Clears the cache for a specific account or all accounts.
+   * @param publicKey - Optional public key to clear specific cache
+   */
+  clearCache(publicKey?: string): void {
+    if (publicKey) {
+      this.accountSequenceCache.delete(publicKey);
+    } else {
+      this.accountSequenceCache.clear();
+    }
+  }
+
+  /**
+   * Handles submission errors and invalidates cache on sequence errors.
+   * If the error indicates a bad sequence number (tx_bad_seq), the cache is cleared
+   * to prevent building transactions on top of an incorrect sequence.
+   * @param error - The error from transaction submission
+   * @param publicKey - The account public key to clear cache for
+   * @returns Whether the cache was cleared
+   */
+  handleSubmissionError(error: unknown, publicKey?: string): boolean {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    
+    // Check for Stellar sequence error patterns
+    const sequenceErrorPatterns = [
+      'tx_bad_seq',
+      'bad sequence',
+      'sequence number',
+      'sequence mismatch'
+    ];
+    
+    const isSequenceError = sequenceErrorPatterns.some(pattern =>
+      errorMessage.toLowerCase().includes(pattern)
+    );
+    
+    if (isSequenceError) {
+      this.logger.warn(`Sequence error detected, clearing cache for ${publicKey || 'all accounts'}`);
+      this.clearCache(publicKey);
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * Cleans up expired cache entries to prevent memory leaks.
+   * This should be called periodically in long-running applications.
+   * @returns Number of entries removed
+   */
+  cleanupExpiredCache(): number {
+    let removed = 0;
+    const now = Date.now();
+    
+    for (const [publicKey, cached] of this.accountSequenceCache.entries()) {
+      if (now - cached.timestamp > this.cacheTtlMs) {
+        this.accountSequenceCache.delete(publicKey);
+        removed++;
+      }
+    }
+    
+    if (removed > 0) {
+      this.logger.debug(`Cleaned up ${removed} expired cache entries`);
+    }
+    
+    return removed;
+  }
+
+  /**
+   * Submits multiple transactions in sequential order to prevent sequence conflicts.
+   * This is critical when building transactions offline with cached sequences.
+   * Transactions are submitted one at a time, waiting for each to succeed before submitting the next.
+   * 
+   * @param transactions - Array of signed transactions to submit
+   * @param options - Submission options
+   * @param options.onProgress - Callback called after each transaction submission
+   * @param options.sourcePublicKey - The source account public key for error handling
+   * @returns Array of submission results in the same order as input transactions
+   * 
+   * @example
+   * ```typescript
+   * // Build transactions while offline
+   * const tx1 = await buildTransactionOffline(account1);
+   * const tx2 = await buildTransactionOffline(account1);
+   * const tx3 = await buildTransactionOffline(account1);
+   * 
+   * // Submit them in order when back online
+   * const results = await client.submitTransactionsSequentially(
+   *   [tx1, tx2, tx3],
+   *   {
+   *     sourcePublicKey: account1.publicKey(),
+   *     onProgress: (index, result) => console.log(`Tx ${index + 1}: ${result.status}`)
+   *   }
+   * );
+   * ```
+   */
+  async submitTransactionsSequentially(
+    transactions: (Transaction | FeeBumpTransaction)[],
+    options?: {
+      onProgress?: (index: number, result: TransactionSendResult) => void;
+      sourcePublicKey?: string;
+    }
+  ): Promise<TransactionSendResult[]> {
+    const results: TransactionSendResult[] = [];
+    
+    for (let i = 0; i < transactions.length; i++) {
+      try {
+        const result = await this.sendTransaction(transactions[i]);
+        results.push(result);
+        
+        if (options?.onProgress) {
+          options.onProgress(i, result);
+        }
+        
+        // If successful, wait a brief moment for the transaction to be processed
+        // This helps prevent race conditions with sequence numbers
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        // Handle submission error and clear cache if it's a sequence error
+        const wasSequenceError = this.handleSubmissionError(error, options?.sourcePublicKey);
+        
+        // Re-throw with additional context
+        throw new Error(
+          `Transaction ${i + 1}/${transactions.length} failed${wasSequenceError ? ' (cache cleared due to sequence error)' : ''}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+    
+    return results;
+  }
+
+  /**
+   * Validates transaction fee based on current network conditions.
+   * This is useful when building transactions offline and needing to validate fees before submission.
+   * 
+   * @param transaction - The transaction to validate
+   * @param options - Fee validation options
+   * @param options.minFee - Minimum acceptable fee in stroops
+   * @param options.maxFee - Maximum acceptable fee in stroops
+   * @param options.simulate - Whether to simulate to get recommended fee (default: true)
+   * @returns The recommended fee if simulation succeeds, or current fee if validation passes
+   * @throws Error if fee is too low or simulation fails
+   * 
+   * @example
+   * ```typescript
+   * // Build transaction offline
+   * const tx = await buildTransactionOffline(account);
+   * 
+   * // Back online - validate fee
+   * const recommendedFee = await client.validateFee(tx, {
+   *   minFee: 100000,
+   *   maxFee: 500000
+   * });
+   * 
+   * // If recommended fee is different, rebuild transaction with new fee
+   * if (recommendedFee !== parseInt(tx.fee)) {
+   *   const updatedTx = await rebuildTransactionWithNewFee(tx, recommendedFee);
+   * }
+   * ```
+   */
+  async validateFee(
+    transaction: Transaction,
+    options?: {
+      minFee?: number;
+      maxFee?: number;
+      simulate?: boolean;
+    }
+  ): Promise<number> {
+    const simulate = options?.simulate ?? true;
+    const minFee = options?.minFee ?? 100_000;
+    const maxFee = options?.maxFee ?? 1_000_000;
+    
+    const currentFee = parseInt(transaction.fee);
+    
+    if (currentFee < minFee) {
+      throw new Error(`Transaction fee ${currentFee} is below minimum ${minFee}`);
+    }
+    
+    if (currentFee > maxFee) {
+      throw new Error(`Transaction fee ${currentFee} exceeds maximum ${maxFee}`);
+    }
+    
+    if (simulate) {
+      try {
+        const simulation = await this.simulateTransaction(transaction);
+        
+        if (rpc.Api.isSimulationSuccess(simulation)) {
+          // Access the resource fee from simulation result
+          const minResourceFee = simulation.minResourceFee ?? 100_000;
+          const recommendedFee = parseInt(minResourceFee.toString());
+          
+          // If recommended fee is significantly higher (20% buffer), recommend it
+          if (recommendedFee > currentFee * 1.2) {
+            this.logger.info(`Recommended fee ${recommendedFee} is significantly higher than current ${currentFee}`);
+            return recommendedFee;
+          }
+        }
+      } catch (error) {
+        this.logger.warn(`Fee simulation failed, using original fee: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    
+    // Return current fee if validation passes
+    return currentFee;
   }
 
   /**
@@ -453,8 +783,19 @@ export class StellarClient extends BaseStellarRpcClient {
    */
   async prepareTransaction(tx: Transaction | FeeBumpTransaction): Promise<Transaction> {
     this.logger.debug("Preparing transaction");
+    if (tx instanceof FeeBumpTransaction) {
+      return this.executeWithErrorHandling(
+        () => this.rpc.prepareTransaction(tx),
+        "Failed to prepare transaction"
+      );
+    }
+
     return this.executeWithErrorHandling(
-      () => this.rpc.prepareTransaction(tx),
+      async () => {
+        const simulation = await this.simulateTransaction(tx);
+        const assembledTx = rpc.assembleTransaction(tx, simulation).build();
+        return this.applyFeeBuffer(assembledTx);
+      },
       "Failed to prepare transaction"
     );
   }
@@ -692,6 +1033,91 @@ export class StellarClient extends BaseStellarRpcClient {
       restored.push(tracked);
     }
     return restored;
+  ): Promise<TransactionPollResult> {
+    return this.executeWithErrorHandling(async () => {
+      const timeoutMs = params?.timeoutMs ?? 30_000;
+      const intervalMs = params?.intervalMs ?? 1_000;
+      const onProgress = params?.onProgress;
+
+      validatePollingInterval(timeoutMs, "timeoutMs", true);
+      validatePollingInterval(intervalMs, "intervalMs", false);
+
+      return await new Promise<TransactionPollResult>((resolve, reject) => {
+        let settled = false;
+        let pollTimer: ReturnType<typeof setTimeout> | undefined;
+
+        const clearTimers = () => {
+          clearTimeout(timeoutTimer);
+          if (pollTimer) {
+            clearTimeout(pollTimer);
+          }
+        };
+
+        const settle = (callback: () => void) => {
+          if (settled) {
+            return;
+          }
+
+          settled = true;
+          clearTimers();
+          callback();
+        };
+
+        const scheduleNextPoll = () => {
+          if (settled) {
+            return;
+          }
+
+          pollTimer = setTimeout(() => {
+            void pollOnce();
+          }, intervalMs);
+        };
+
+        const timeoutTimer = setTimeout(() => {
+          settle(() => {
+            reject(
+              new TransactionTimeoutError(
+                `Timed out waiting for transaction ${hash} after ${timeoutMs}ms`
+              )
+            );
+          });
+        }, timeoutMs);
+
+        const pollOnce = async () => {
+          try {
+            const res = await this.getTransaction(hash);
+            if (settled) {
+              return;
+            }
+
+            const parsed = parseTransactionPollResult(res);
+
+            if (onProgress) {
+              Promise.resolve()
+                .then(() => onProgress(parsed.status, parsed.ledger ?? 0))
+                .catch((err) => {
+                  this.logger.warn("onProgress callback error", err);
+                });
+            }
+
+            if (parsed.status === "SUCCESS" || parsed.status === "FAILED") {
+              settle(() => resolve(parsed));
+              return;
+            }
+
+            scheduleNextPoll();
+          } catch (error) {
+            if (settled) {
+              return;
+            }
+
+            settle(() => reject(error));
+          }
+        };
+
+        void pollOnce();
+      });
+    }, `Failed while polling transaction ${hash}`);
   }
   /**
    * Signs a transaction using a local Keypair.
@@ -739,9 +1165,13 @@ export class StellarClient extends BaseStellarRpcClient {
         // Basic operation serialization - can be extended based on needs
       }))
     };
-
+    
+    if (typeof Buffer === 'undefined') {
+      throw new Error('Buffer is not defined. Please polyfill Buffer for React Native/mobile environments.');
+    }
     return Buffer.from(JSON.stringify(serializedData)).toString('base64');
   }
+
 
   /**
    * Deserializes a transaction from a Base64 JSON string.
@@ -750,8 +1180,12 @@ export class StellarClient extends BaseStellarRpcClient {
    * @returns The reconstructed Transaction or FeeBumpTransaction
    */
   deserializeTransaction(jsonString: string): Transaction | FeeBumpTransaction {
+    if (typeof Buffer === 'undefined') {
+      throw new Error('Buffer is not defined. Please polyfill Buffer for React Native/mobile environments.');
+    }
     try {
       const decodedJson = Buffer.from(jsonString, 'base64').toString('utf8');
+
       const serializedData = JSON.parse(decodedJson);
 
       // Validate required fields
@@ -941,6 +1375,53 @@ export class StellarClient extends BaseStellarRpcClient {
       throw toAxionveraError(error, fallbackMessage);
     }
   }
+
+  private applyFeeBuffer(tx: Transaction): Transaction {
+    const sorobanData = tx.toEnvelope().v1().tx().ext().value();
+    if (!sorobanData) {
+      return tx;
+    }
+
+    const resources = sorobanData.resources();
+    const simulatedResourceFee = sorobanData.resourceFee().toBigInt();
+    const simulatedTotalFee = BigInt(tx.fee);
+    const simulatedBaseFee = simulatedTotalFee > simulatedResourceFee
+      ? simulatedTotalFee - simulatedResourceFee
+      : BigInt(0);
+
+    const bufferedResourceFee = multiplyAndCeil(simulatedResourceFee, this.feeBufferMultiplier);
+    const bufferedBaseFee = multiplyAndCeil(simulatedBaseFee, this.feeBufferMultiplier);
+    const bufferedTotalFee = bufferedBaseFee + bufferedResourceFee;
+
+    if (this.maxFeeLimit !== undefined) {
+      if (this.maxFeeLimit < simulatedTotalFee) {
+        throw new ValidationError(
+          `maxFeeLimit (${this.maxFeeLimit.toString()}) is below the simulated minimum fee (${simulatedTotalFee.toString()})`
+        );
+      }
+
+      if (bufferedTotalFee > this.maxFeeLimit) {
+        throw new ValidationError(
+          `Buffered fee (${bufferedTotalFee.toString()}) exceeds maxFeeLimit (${this.maxFeeLimit.toString()})`
+        );
+      }
+    }
+
+    const bufferedSorobanData = new SorobanDataBuilder(sorobanData)
+      .setResources(
+        multiplyAndCeil(resources.instructions(), this.feeBufferMultiplier),
+        multiplyAndCeil(resources.diskReadBytes(), this.feeBufferMultiplier),
+        multiplyAndCeil(resources.writeBytes(), this.feeBufferMultiplier)
+      )
+      .setResourceFee(bufferedResourceFee.toString())
+      .build();
+
+    return TransactionBuilder.cloneFrom(tx, {
+      fee: bufferedBaseFee.toString(),
+      networkPassphrase: tx.networkPassphrase,
+      sorobanData: bufferedSorobanData
+    }).build();
+  }
 }
 
 /**
@@ -955,4 +1436,74 @@ function extractCursor(url: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function multiplyAndCeil(value: number | bigint | string, multiplier: number): bigint {
+  const scaledValue = typeof value === "bigint" ? value : BigInt(String(value));
+  if (scaledValue < BigInt(0)) {
+    throw new ValidationError("Cannot buffer a non-finite or negative resource value");
+  }
+
+  const { numerator, denominator } = toFraction(multiplier);
+  return (scaledValue * numerator + (denominator - BigInt(1))) / denominator;
+}
+
+function toFraction(multiplier: number): { numerator: bigint; denominator: bigint } {
+  if (!Number.isFinite(multiplier) || multiplier < 0) {
+    throw new ValidationError("feeBufferMultiplier must be a finite number greater than or equal to 0");
+  }
+
+  const decimalString = multiplier.toString().includes("e")
+    ? multiplier.toFixed(12).replace(/0+$/, "").replace(/\.$/, "")
+    : multiplier.toString();
+  const [wholePart, fractionalPart = ""] = decimalString.split(".");
+
+  if (!/^\d+$/.test(wholePart) || !/^\d*$/.test(fractionalPart)) {
+    throw new ValidationError("feeBufferMultiplier must be a valid decimal number");
+  }
+
+  const denominator = BigInt(10) ** BigInt(fractionalPart.length);
+  const numerator = BigInt(`${wholePart}${fractionalPart}`);
+
+  return {
+    numerator,
+    denominator: denominator === BigInt(0) ? BigInt(1) : denominator
+  };
+}
+
+function validatePollingInterval(value: number, fieldName: string, allowZero: boolean): void {
+  const valid = Number.isFinite(value) && (allowZero ? value >= 0 : value > 0);
+  if (!valid) {
+    throw new ValidationError(`${fieldName} must be a finite ${allowZero ? "non-negative" : "positive"} number`);
+  }
+}
+
+function parseTransactionPollResult(response: unknown): TransactionPollResult {
+  const record = isRecord(response) ? response : {};
+  const status = typeof record.status === "string" ? record.status : "UNKNOWN";
+
+  return {
+    ...record,
+    status,
+    ledger: normalizeLedger(record.ledger)
+  };
+}
+
+function normalizeLedger(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function isRecord(value: unknown): value is TransactionResponseRecord {
+  return typeof value === "object" && value !== null;
 }
