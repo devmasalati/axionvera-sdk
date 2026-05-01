@@ -17,6 +17,7 @@ export {
     WalletNotInstalledError,
     FaucetRateLimitError,
     InsecureNetworkError,
+    NetworkMismatchError,
     AxionveraRPCError,
     SimulationFailedError,
     WalletConnectionError,

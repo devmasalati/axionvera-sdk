@@ -1,4 +1,5 @@
 import { Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
+import { AxionveraNetwork } from "../utils/networkConfig";
 import { assertValidXDR } from '../utils/xdrValidator';
 import { InvalidXDRError } from '../errors/axionveraError';
 
@@ -35,6 +36,18 @@ export interface WalletConnector {
   getPublicKey(): Promise<string>;
 
   /**
+   * Gets the network that the wallet is currently connected to.
+   * @returns The network identifier
+   */
+  getNetwork(): Promise<AxionveraNetwork>;
+
+  /**
+   * Signs a transaction XDR string.
+   * 
+   * Must throw a `WalletConnectionError` if the user rejects the signature or if the connection fails.
+   * 
+   * @param xdr - The base64-encoded transaction XDR to sign
+   * @param networkPassphrase - The network passphrase
 * Signs a transaction XDR string using the wallet's private key.
    * * Must throw a `WalletConnectionError` if the user rejects the signature or if the connection fails.
    * * @param transactionXdr - The base64-encoded transaction XDR to sign
@@ -69,6 +82,7 @@ export interface WalletConnector {
  */
 export class LocalKeypairWalletConnector implements WalletConnector {
   private readonly keypair: Keypair;
+  private readonly network: AxionveraNetwork;
 
   /**
    * Creates a new LocalKeypairWalletConnector with the provided Keypair.
@@ -87,8 +101,9 @@ export class LocalKeypairWalletConnector implements WalletConnector {
    * const randomWallet = new LocalKeypairWalletConnector(randomKeypair);
    * ```
    */
-  constructor(keypair: Keypair) {
+  constructor(keypair: Keypair, network: AxionveraNetwork = "testnet") {
     this.keypair = keypair;
+    this.network = network;
   }
 
   /**
@@ -104,6 +119,12 @@ export class LocalKeypairWalletConnector implements WalletConnector {
     return this.keypair.publicKey();
   }
 
+  /** @inheritdoc */
+  async getNetwork(): Promise<AxionveraNetwork> {
+    return this.network;
+  }
+
+  /** @inheritdoc */
   /**
    * Signs a transaction using the stored Keypair.
    * @param transactionXdr - The base64-encoded transaction XDR to sign
