@@ -1,122 +1,64 @@
-# Axionvera SDK
+# `@axionvera/react`
 
-[![npm version](https://img.shields.io/npm/v/axionvera-sdk.svg)](https://www.npmjs.com/package/axionvera-sdk)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![TypeScript](https://img.shields.io/badge/%3C%2F%3E-TypeScript-%230074c1.svg)](https://www.typescriptlang.org/)
-[![Build Status](https://github.com/axionvera/axionvera-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/axionvera/axionvera-sdk/actions)
+React bindings for Axionvera's Stellar SDK.
 
-**Axionvera SDK** is a powerful, robust TypeScript developer toolkit designed to simplify interactions with Axionvera smart contracts deployed on the Stellar blockchain using Soroban. It provides a clean, strongly typed interface for dApp developers to connect, build, simulate, and submit transactions with ease.
+## Installation
 
----
-
-## 📖 Table of Contents
-
-- [Overview](#-overview)
-- [Features](#-features)
-- [Prerequisites](#-prerequisites)
-- [Installation](#-installation)
-- [Quick Start](#-quick-start)
-- [Usage Examples](#-usage-examples)
-- [API Reference](#-api-reference)
-- [Troubleshooting](#-troubleshooting)
-- [Contributing](#-contributing)
-- [License](#-license)
-- [Contact](#-contact)
-
----
-
-## 🌟 Overview
-
-Building on Stellar's Soroban smart contract platform requires managing RPC connections, building XDR transactions, simulating contract calls for resource limits, and handling cryptographic signatures. The Axionvera SDK abstracts these complexities away. Whether you're building a frontend dApp or a backend service, the SDK provides the tools you need to interact with the Axionvera ecosystem safely and efficiently.
-
-## ✨ Features
-
-- **Network Management**: Seamlessly connect to Stellar networks (Testnet/Mainnet) via Soroban RPC.
-- **Transaction Lifecycle**: Build, simulate, prepare, and submit Soroban contract call transactions in a few lines of code.
-- **Resilience**: Built-in HTTP interceptors with exponential backoff for robust RPC interactions, handling rate limits automatically.
-- **Configurable Logging**: Built-in logger with automatic sensitive data redaction for easier debugging.
-- **Vault Contract Module**: Out-of-the-box support for the Axionvera Vault contract (`deposit`, `withdraw`, `balance`, `claimRewards`).
-- **Faucet Client**: Automated account funding for Testnet and Futurenet environments.
-- **SEP-0007 Support**: Standardized URI generation for mobile wallet deep-linking and QR code payments.
-- **Wallet Integration**: Flexible `WalletConnector` interface, including a built-in `LocalKeypairWalletConnector` for server-side or automated signing.
-
----
-
-## 📋 Prerequisites
-
-Before using the Axionvera SDK, ensure you have the following installed:
-
-- **Node.js**: v18.0.0 or higher is recommended.
-- **Package Manager**: npm, yarn, or pnpm.
-- **Stellar Account**: A funded Stellar account on your target network (Testnet or Mainnet) to pay for transaction fees.
-
----
-
-## 📦 Installation
-
-Install the package using your preferred package manager:
-
-**Using npm:**
 ```bash
-npm install axionvera-sdk
+npm install @axionvera/react @axionvera/core react
 ```
 
-**Using yarn:**
+If you want the built-in Freighter wallet support, also install:
+
 ```bash
-yarn add axionvera-sdk
+npm install @stellar/freighter-api
 ```
 
-**Using pnpm:**
-```bash
-pnpm add axionvera-sdk
-```
+## Usage
 
----
+Wrap your app with `AxionveraProvider`, then use the hooks anywhere below it.
 
-## 🚀 Quick Start
+```tsx
+import { AxionveraProvider } from '@axionvera/react';
 
-Here is a step-by-step guide to initializing the SDK, connecting a local wallet, and executing a transaction on the Vault contract.
-
-```typescript
-import { Keypair } from "@stellar/stellar-sdk";
-import {
-  LocalKeypairWalletConnector,
-  StellarClient,
-  VaultContract
-} from "axionvera-sdk";
-
-// 1. Initialize the Stellar Client for the Testnet
-const client = new StellarClient({ network: "testnet" });
-
-// 2. Set up the Wallet Connector with your secret key
-const keypair = Keypair.fromSecret(process.env.STELLAR_SECRET_KEY!);
-const wallet = new LocalKeypairWalletConnector(keypair);
-
-// 3. Initialize the Vault Contract wrapper
-const vault = new VaultContract({
-  client,
-  contractId: process.env.AXIONVERA_VAULT_CONTRACT_ID!,
-  wallet
-});
-
-// 4. Execute a transaction
-async function run() {
-  try {
-    console.log("Depositing 1000 units into the vault...");
-    
-    // The SDK automatically handles building, simulating, signing, and submitting the transaction
-    const depositResult = await vault.deposit({ amount: 1000n });
-    
-    console.log("Transaction successful!");
-    console.log("Result:", depositResult);
-  } catch (error) {
-    console.error("Transaction failed:", error);
-  }
+export function AppRoot() {
+  return (
+    <AxionveraProvider
+      clientOptions={{ network: 'testnet' }}
+      vaultContractId="C...YOUR_VAULT_ID"
+    >
+      <App />
+    </AxionveraProvider>
+  );
 }
-
-run();
 ```
 
+```tsx
+import {
+  useStellarClient,
+  useVaultContract,
+  useWallet
+} from '@axionvera/react';
+
+export function Dashboard() {
+  const client = useStellarClient();
+  const vault = useVaultContract();
+  const wallet = useWallet();
+
+  const connect = async () => {
+    await wallet.connect();
+    const health = await client.getHealth();
+    const balance = await vault.getBalance();
+
+    console.log({ health, balance });
+  };
+
+  return (
+    <button onClick={() => void connect()}>
+      {wallet.isConnected ? wallet.publicKey : 'Connect Freighter'}
+    </button>
+  );
+}
 ---
 
 ## 💻 Usage Examples
@@ -197,21 +139,18 @@ npm run build
 npm test
 ```
 
----
+## API
 
-## 📄 License
+- `AxionveraProvider`: Creates a shared `StellarClient`, exposes wallet state, and optionally configures a default vault contract ID.
+- `useStellarClient()`: Returns the provider's shared `StellarClient`.
+- `useVaultContract(contractId?)`: Returns a `VaultContract` bound to the provider client and wallet connector.
+- `useWallet()`: Returns Freighter-aware wallet state plus `connect()` and `refresh()` helpers.
 
-This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
+## Freighter behavior
 
----
+`useWallet()` automatically:
 
-## 📞 Contact
-
-If you have any questions, feedback, or need support, feel free to reach out:
-
-- **GitHub Issues**: For bug reports and feature requests, please use the [Issue Tracker](https://github.com/axionvera/axionvera-sdk/issues).
-- **Website**: [https://axionvera.com](https://axionvera.com)
-- **Twitter**: [@Axionvera](https://twitter.com/axionvera)
-
----
-*Built with ❤️ by the Axionvera Team.*
+- detects whether Freighter is available
+- restores an allowed account when possible
+- watches for account changes via Freighter's wallet watcher
+- refreshes wallet state when the window regains focus

@@ -206,8 +206,8 @@ export class TransactionSigner {
    * @returns The built transaction
    */
   async buildTransaction(params: TransactionBuildParams): Promise<Transaction> {
-    // Get account information
-    const account = await this.client.rpc.getAccount(params.sourceAccount);
+    // Get account information with cache fallback for offline resilience
+    const account = await this.client.getAccountWithCache(params.sourceAccount);
 
     // Build operations
     const operations: Operation[] = params.operations.map(op =>
@@ -259,7 +259,7 @@ export class TransactionSigner {
 
     const cpuInstructions = simulation.results?.[0]?.cpuInstructions ?? 0;
     const memoryBytes = simulation.results?.[0]?.memoryBytes ?? 0;
-    const recommendedFee = simulation.transactionData?.resourceFee ?? this.defaultFee;
+    const recommendedFee = simulation.minResourceFee ?? this.defaultFee;
 
     return {
       cpuInstructions,
@@ -285,6 +285,19 @@ export class TransactionSigner {
       }
     );
 
+// Get fee source account with cache fallback for offline resilience
+    const feeSourceAccount = await this.client.getAccountWithCache(params.feeSource);
+
+    // Build the fee bump transaction
+    const feeBumpTx = new FeeBumpTransaction.Builder(
+      feeSourceAccount,
+      params.baseFee.toString(),
+      this.client.networkPassphrase
+    )
+      .setInnerTransaction(innerTransaction)
+      .build();
+
+    // Sign the fee bump transaction
     return await this.wallet.signTransaction(
       feeBumpEnvelopeXdr,
       this.client.networkPassphrase

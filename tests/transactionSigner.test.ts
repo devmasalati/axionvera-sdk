@@ -79,7 +79,7 @@ describe('TransactionSigner', () => {
       
       const mockSimulation = {
         results: [{ cpuInstructions: 100000, memoryBytes: 1000 }],
-        transactionData: { resourceFee: 50000 },
+        minResourceFee: 50000,
         error: undefined
       };
 
@@ -145,7 +145,7 @@ describe('TransactionSigner', () => {
       
       const mockSimulation = {
         results: [{ cpuInstructions: 100000, memoryBytes: 1000 }],
-        transactionData: { resourceFee: 50000 },
+        minResourceFee: 50000,
         error: undefined
       };
 

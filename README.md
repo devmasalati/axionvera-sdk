@@ -138,6 +138,26 @@ run();
 
 ---
 
+## 🌐 Quick Start (Browser)
+
+Try the SDK in your browser without any local setup using our interactive playground:
+
+[![Open in StackBlitz](https://stackblitz.com/github/Listoncrypt/axionvera-sdk/badge.svg)](https://stackblitz.com/github/Listoncrypt/axionvera-sdk?file=examples/browser-sandbox/index.ts)
+
+The browser sandbox uses the `MockWalletConnector` to demonstrate SDK initialization and wallet connection flows without requiring a real wallet extension. This is perfect for:
+- Quick prototyping and testing
+- Understanding the SDK API
+- Demonstrating the SDK to stakeholders
+
+To run the sandbox locally:
+```bash
+cd examples/browser-sandbox
+npm install
+npm run dev
+```
+
+---
+
 ## � Migration Guide
 
 **Coming from Stellar Classic (stellar-sdk v10)?** 

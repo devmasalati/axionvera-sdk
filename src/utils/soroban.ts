@@ -1,5 +1,6 @@
 import { xdr } from "@stellar/stellar-sdk";
 import { decodeXdrBase64 } from "./xdrCache";
+import { assertValidXDR } from './xdrValidator';
 
 /**
  * Decoded Soroban event topic representation.
@@ -245,6 +246,14 @@ export function parseEvents(
 /**
  * Legacy version of parseEvents that maintains backward compatibility.
  * @deprecated Use parseEvents({ filterDiagnostic: true }) instead
+ * Converts XDR-encoded topics and values into more accessible formats where possible.
+ *
+ * Consumer-supplied topic strings are sanitized with {@link assertValidXDR} before
+ * being decoded.  Any topic that fails the check is kept as-is and the error is
+ * surfaced rather than silently swallowed.
+ *
+ * @param events - Raw events from Soroban RPC (GetEventsResponse)
+ * @returns Parsed events with decoded symbols
  */
 export function parseEventsLegacy(events: any[]): any[] {
   return events.map(event => {
@@ -253,6 +262,8 @@ export function parseEventsLegacy(events: any[]): any[] {
     if (Array.isArray(event.topic)) {
       parsedEvent.topicNames = event.topic.map((t: string) => {
         try {
+          // Sanitize before any buffer allocation.
+          assertValidXDR(t, 'parseEvents');
           const scVal = decodeXdrBase64(t);
           const s = scVal as any;
           if (s.arm() === 'sym') {
