@@ -13,6 +13,7 @@ export type {
   SerializableValue,
 } from './client/stellarClient';
 export type { AxionveraClientConfig } from './client/axionveraClient';
+export type { LogLevel, CustomLogger } from './utils/logger';
 
 // Contracts
 export { BaseContract } from './contracts/BaseContract';

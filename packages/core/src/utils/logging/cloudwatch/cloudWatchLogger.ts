@@ -5,7 +5,7 @@ interface CloudWatchLogsClient {
 }
 
 export class CloudWatchLogger {
-  private client: CloudWatchLogsClient | null = null;
+  private client: any = null;
   private logQueue: LogEntry[] = [];
   private flushTimer: NodeJS.Timeout | null = null;
   private sequenceToken: string | null = null;
@@ -182,8 +182,8 @@ export class CloudWatchLogger {
         const response = await this.client!.send(command);
         const stream = response.logStreams?.find((s: any) => s.logStreamName === this.config.logStreamName);
         
-        if (stream?.uploadSequenceToken) {
-          params.sequenceToken = stream.uploadSequenceToken;
+        if (stream && (stream as any).uploadSequenceToken) {
+          params.sequenceToken = (stream as any).uploadSequenceToken;
         }
       }
 

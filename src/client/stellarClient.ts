@@ -330,6 +330,7 @@ this.accountCache = new Map();
         {
           onEvent: (event) => this.logger.debug('WebSocket event received:', event),
           onConnectionChange: (connected) => this.logger.debug(`WebSocket connection changed: ${connected}`),
+          logger: this.logger,
         }
       );
     }
@@ -1614,6 +1615,55 @@ this.accountCache = new Map();
       queueTimeout: this.concurrencyConfig.queueTimeout,
       message: 'Stats not available from wrapped client'
     };
+  }
+
+  /**
+   * Subscribe to contract events by polling Soroban RPC.
+   * Returned emitters should be closed when no longer needed.
+   */
+  subscribeToEvents(
+    contractId: string,
+    topics: string[] = [],
+    pollingIntervalMs = 5000
+  ): ContractEventEmitter {
+    let emitter: ContractEventEmitter;
+    emitter = new ContractEventEmitter(
+      this,
+      contractId,
+      topics,
+      pollingIntervalMs,
+      () => {
+        this.eventEmitters.delete(emitter);
+      }
+    );
+
+    this.eventEmitters.add(emitter);
+    emitter.start();
+    return emitter;
+  }
+
+  /**
+   * Stop and release all contract event emitters created by this client.
+   */
+  removeAllListeners(): void {
+    for (const emitter of this.eventEmitters) {
+      emitter.close();
+    }
+    this.eventEmitters.clear();
+    if (this.webSocketManager) {
+      this.webSocketManager.disconnect();
+    }
+  }
+
+  /**
+   * Cleanup all asynchronous resources owned by this client.
+   */
+  async cleanup(): Promise<void> {
+    this.removeAllListeners();
+    if (this.webSocketManager) {
+      this.webSocketManager.disconnect();
+    }
+    await this.logger.destroy();
   }
 }
 

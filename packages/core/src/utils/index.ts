@@ -4,6 +4,7 @@ export { buildContractCallOperation, buildContractCallTransaction, bumpTransacti
 export { getDefaultRpcUrl, getNetworkPassphrase, resolveNetworkConfig } from './networkConfig';
 export { generateTransactionURI, generatePayURI } from './sep7';
 export { Logger } from './logger';
+export type { LogLevel, CustomLogger } from './logger';
 export { decodeXdrBase64, clearXdrCache, getXdrCacheSize } from './xdrCache';
 export { getRequiredSigners } from './getRequiredSigners';
 export { verifyWebhookSignature } from './webhooks';

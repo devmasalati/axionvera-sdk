@@ -325,6 +325,7 @@ this.accountFetchTimeoutMs = options?.accountFetchTimeoutMs ?? 2000;
         {
           onEvent: (event) => this.logger.debug('WebSocket event received:', event),
           onConnectionChange: (connected) => this.logger.debug(`WebSocket connection changed: ${connected}`),
+          logger: this.logger,
         }
       );
     }
@@ -1461,36 +1462,61 @@ this.accountFetchTimeoutMs = options?.accountFetchTimeoutMs ?? 2000;
     return this.getConcurrencyStats();
   }
 
-  /**
-   * Subscribe to real-time events via WebSocket.
-   * @param filter - Event filter criteria
-   * @param callback - Callback function for received events
-   * @returns Subscription ID that can be used to unsubscribe
-   */
-  async subscribeToEvents(
+  subscribeToEvents(contractId: string, topics?: string[], pollingIntervalMs?: number): ContractEventEmitter;
+  subscribeToEvents(
     filter: EventFilter,
     callback: (event: SorobanEvent) => void
-  ): Promise<string> {
+  ): Promise<string>;
+  subscribeToEvents(
+    contractIdOrFilter: string | EventFilter,
+    topicsOrCallback: string[] | ((event: SorobanEvent) => void) = [],
+    pollingIntervalMs = 5000
+  ): string | ContractEventEmitter | Promise<string> {
+    if (typeof contractIdOrFilter === 'string') {
+      const contractId = contractIdOrFilter;
+      const topics = Array.isArray(topicsOrCallback) ? topicsOrCallback : [];
+      let emitter: ContractEventEmitter;
+      emitter = new ContractEventEmitter(
+        this,
+        contractId,
+        topics,
+        pollingIntervalMs,
+        () => {
+          this.eventEmitters.delete(emitter);
+        }
+      );
+
+      this.eventEmitters.add(emitter);
+      emitter.start();
+      return emitter;
+    }
+
     if (!this.webSocketManager) {
       throw new NetworkError('WebSocket manager not initialized. Please provide webSocketConfig in constructor.');
     }
 
-    // Connect WebSocket if not already connected
+    const callback = topicsOrCallback as (event: SorobanEvent) => void;
+
     if (!this.webSocketManager.isConnected()) {
-      await this.webSocketManager.connect();
+      return this.webSocketManager.connect().then(() => this.webSocketManager!.subscribe(contractIdOrFilter, callback));
     }
 
-    return this.webSocketManager.subscribe(filter, callback);
+    return this.webSocketManager.subscribe(contractIdOrFilter, callback);
   }
 
   /**
    * Unsubscribe from real-time events.
    * @param subscriptionId - The subscription ID returned by subscribeToEvents
    */
-  unsubscribeFromEvents(subscriptionId: string): void {
-    if (this.webSocketManager) {
-      this.webSocketManager.unsubscribe(subscriptionId);
+  unsubscribeFromEvents(subscriptionId: string | ContractEventEmitter): void {
+    if (typeof subscriptionId === 'string') {
+      if (this.webSocketManager) {
+        this.webSocketManager.unsubscribe(subscriptionId);
+      }
+      return;
     }
+
+    subscriptionId.close();
   }
 
   /**
@@ -1541,13 +1567,21 @@ this.accountFetchTimeoutMs = options?.accountFetchTimeoutMs ?? 2000;
    * ```
    */
   public removeAllListeners(): void {
-    this.cleanup();
+    for (const emitter of this.eventEmitters) {
+      emitter.close();
+    }
+    this.eventEmitters.clear();
+    this.disconnectWebSocket();
   }
 
   /**
    * Cleanup all async resources including WebSocket and CloudWatch.
    */
   async cleanup(): Promise<void> {
+    for (const emitter of this.eventEmitters) {
+      emitter.close();
+    }
+    this.eventEmitters.clear();
     this.disconnectWebSocket();
     await this.logger.destroy();
   }
