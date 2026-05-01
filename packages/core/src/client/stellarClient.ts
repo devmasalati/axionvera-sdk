@@ -868,9 +868,13 @@ this.accountFetchTimeoutMs = options?.accountFetchTimeoutMs ?? 2000;
         // Basic operation serialization - can be extended based on needs
       }))
     };
-
+    
+    if (typeof Buffer === 'undefined') {
+      throw new Error('Buffer is not defined. Please polyfill Buffer for React Native/mobile environments.');
+    }
     return Buffer.from(JSON.stringify(serializedData)).toString('base64');
   }
+
 
   /**
    * Deserializes a transaction from a Base64 JSON string.
@@ -879,8 +883,12 @@ this.accountFetchTimeoutMs = options?.accountFetchTimeoutMs ?? 2000;
    * @returns The reconstructed Transaction or FeeBumpTransaction
    */
   deserializeTransaction(jsonString: string): Transaction | FeeBumpTransaction {
+    if (typeof Buffer === 'undefined') {
+      throw new Error('Buffer is not defined. Please polyfill Buffer for React Native/mobile environments.');
+    }
     try {
       const decodedJson = Buffer.from(jsonString, 'base64').toString('utf8');
+
       const serializedData = JSON.parse(decodedJson);
 
       // Validate required fields
