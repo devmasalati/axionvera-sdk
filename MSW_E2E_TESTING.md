@@ -48,6 +48,72 @@ describe('My Application Tests', () => {
 });
 ```
 
+### Automated Wallet Signing (Playwright/Cypress/CI)
+
+When running E2E tests, you typically want to avoid browser wallet popups (e.g. “Approve” prompts).
+Use `MockWalletConnector` to sign transactions silently with a hardcoded Keypair or secret key.
+
+```typescript
+import { AxionveraClient, MockWalletConnector } from 'axionvera-sdk';
+import { Keypair } from '@stellar/stellar-sdk';
+
+// Option A: secret key (recommended for CI via env var)
+const wallet = new MockWalletConnector(process.env.E2E_SECRET_KEY!);
+
+// Option B: hardcoded Keypair
+// const wallet = new MockWalletConnector(Keypair.fromSecret('S...'));
+// const wallet = new MockWalletConnector(Keypair.random());
+
+const axionvera = new AxionveraClient({
+  network: 'testnet',
+  wallet
+});
+
+// Use as usual; any signing happens locally with no UI.
+const publicKey = await axionvera.wallet!.getPublicKey();
+```
+
+#### Recommended CI Pattern
+
+1. Generate a dedicated **test** secret key (never use real user funds/keys):
+   - `Keypair.random().secret()` (store it in your CI secret store as `E2E_SECRET_KEY`)
+2. Use MSW for deterministic RPC responses:
+   - Call `setupMswTest()` in your test suites (or run MSW in your browser runner)
+3. Construct your SDK client/contract with the mock wallet:
+   - Pass `wallet: new MockWalletConnector(process.env.E2E_SECRET_KEY!)`
+4. Your E2E runner (Playwright/Cypress) can now exercise full flows without manual approvals.
+
+#### Playwright Example
+
+```ts
+// tests/e2e/my-flow.spec.ts
+import { test, expect } from '@playwright/test';
+import { AxionveraClient, MockWalletConnector } from 'axionvera-sdk';
+
+test('signs without wallet UI', async () => {
+  const wallet = new MockWalletConnector(process.env.E2E_SECRET_KEY!);
+  const axionvera = new AxionveraClient({ network: 'testnet', wallet });
+
+  const pk = await wallet.getPublicKey();
+  expect(pk).toMatch(/^G/);
+});
+```
+
+#### Cypress Example
+
+```ts
+// cypress/e2e/my-flow.cy.ts
+import { AxionveraClient, MockWalletConnector } from 'axionvera-sdk';
+
+it('signs without wallet UI', async () => {
+  const wallet = new MockWalletConnector(Cypress.env('E2E_SECRET_KEY'));
+  const axionvera = new AxionveraClient({ network: 'testnet', wallet });
+
+  const pk = await wallet.getPublicKey();
+  expect(pk).to.match(/^G/);
+});
+```
+
 ### Custom Error Scenarios
 
 ```typescript

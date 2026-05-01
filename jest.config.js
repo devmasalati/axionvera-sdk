@@ -21,4 +21,6 @@ module.exports = {
     '^react-dom$': '<rootDir>/node_modules/react-dom',
     '^react-dom/(.*)$': '<rootDir>/node_modules/react-dom/$1',
   },
+  setupFilesAfterEnv: ['<rootDir>/tests/mocks/setup.ts'],
+  testPathIgnorePatterns: ['/node_modules/', '/dist/']
 };

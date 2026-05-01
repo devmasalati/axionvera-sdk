@@ -40,7 +40,7 @@
     "build": "npm run build --workspaces",
     "typecheck": "npm run typecheck --workspaces",
     "lint": "npm run lint --workspaces",
-    "test": "jest",
+    "test": "jest --config jest.config.js",
     "docs": "typedoc",
     "start": "npm run build --workspaces",
     "size": "size-limit",
@@ -111,6 +111,8 @@
     "provenance": true
   },
   "dependencies": {
-    "@aws-sdk/client-cloudwatch-logs": "^3.1037.0"
+    "@aws-sdk/client-cloudwatch-logs": "^3.1037.0",
+    "ethers": "^6.16.0"
   }
 }
+
