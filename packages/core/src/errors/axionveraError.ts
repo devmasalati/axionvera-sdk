@@ -51,6 +51,7 @@ export class StellarRpcResponseError extends AxionveraError {}
 
 export class StellarRpcTimeoutError extends AxionveraError {}
 
+export class InsecureNetworkError extends AxionveraError {}
 export class TransactionTimeoutError extends StellarRpcTimeoutError {}
 
 export class WalletNotInstalledError extends AxionveraError {}
@@ -59,6 +60,19 @@ export class FaucetRateLimitError extends AxionveraError {}
 export class DeviceLockedError extends AxionveraError {}
 export class UserRejectedError extends AxionveraError {}
 
+export type RPCValidationMismatchErrorOptions = AxionveraErrorOptions & {
+  rpcMethod: string;
+  receivedShape: unknown;
+};
+
+export class RPCValidationMismatchError extends AxionveraError {
+  readonly rpcMethod: string;
+  readonly receivedShape: unknown;
+
+  constructor(message: string, options: RPCValidationMismatchErrorOptions) {
+    super(message, options);
+    this.rpcMethod = options.rpcMethod;
+    this.receivedShape = options.receivedShape;
 export class ContractRevertError extends AxionveraError {
   readonly trapCode?: string;
 

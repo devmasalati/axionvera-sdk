@@ -20,6 +20,15 @@ import {
 } from "../utils/networkConfig";
 import { ConcurrencyConfig, DEFAULT_CONCURRENCY_CONFIG, createConcurrencyControlledClient } from "../utils/concurrencyQueue";
 import { RetryConfig, createHttpClientWithRetry, retry } from "../utils/httpInterceptor";
+import { NetworkError, toAxionveraError, InsecureNetworkError, AxionveraError } from "../errors/axionveraError";
+import {
+  validateRpcResponse,
+  GetHealthResponseSchema,
+  SimulateTransactionResponseSchema,
+  GetTransactionResponseSchema,
+  ValidatedGetHealthResponse,
+  ValidatedGetTransactionResponse,
+} from "../utils/rpcSchemas";
 import { NetworkError, toAxionveraError, InsecureNetworkError, AxionveraError, TransactionTimeoutError, ValidationError } from "../errors/axionveraError";
 import { LogLevel, Logger } from "../utils/logger";
 import { WebSocketManager, EventFilter, SorobanEvent, WebSocketConfig } from "./websocket";
@@ -340,12 +349,12 @@ this.accountFetchTimeoutMs = options?.accountFetchTimeoutMs ?? 2000;
    * Automatically retries on failure.
    * @returns The health check response
    */
-  async getHealth(): Promise<unknown> {
+  async getHealth(): Promise<ValidatedGetHealthResponse> {
     this.logger.debug("Fetching network health");
-    return this.executeWithErrorHandling(
-      () => retry(() => this.rpc.getHealth(), this.retryConfig),
-      "Failed to fetch network health"
-    );
+    return this.executeWithErrorHandling(async () => {
+      const response = await retry(() => this.rpc.getHealth(), this.retryConfig);
+      return validateRpcResponse(GetHealthResponseSchema, response, 'getHealth');
+    }, "Failed to fetch network health");
   }
 
   /**
@@ -683,10 +692,11 @@ this.accountFetchTimeoutMs = options?.accountFetchTimeoutMs ?? 2000;
     tx: Transaction | FeeBumpTransaction
   ): Promise<rpc.Api.SimulateTransactionResponse> {
     this.logger.debug("Simulating transaction");
-    return this.executeWithErrorHandling(
-      () => this.rpc.simulateTransaction(tx),
-      "Failed to simulate transaction"
-    );
+    return this.executeWithErrorHandling(async () => {
+      const response = await this.rpc.simulateTransaction(tx);
+      validateRpcResponse(SimulateTransactionResponseSchema, response, 'simulateTransaction');
+      return response;
+    }, "Failed to simulate transaction");
   }
 
   /**
@@ -919,12 +929,12 @@ this.accountFetchTimeoutMs = options?.accountFetchTimeoutMs ?? 2000;
    * @param hash - The transaction hash
    * @returns The transaction status response
    */
-  async getTransaction(hash: string): Promise<unknown> {
+  async getTransaction(hash: string): Promise<ValidatedGetTransactionResponse> {
     this.logger.debug(`Fetching transaction status for ${hash}`);
-    return this.executeWithErrorHandling(
-      () => retry(() => this.rpc.getTransaction(hash), this.retryConfig),
-      `Failed to fetch transaction ${hash}`
-    );
+    return this.executeWithErrorHandling(async () => {
+      const response = await retry(() => this.rpc.getTransaction(hash), this.retryConfig);
+      return validateRpcResponse(GetTransactionResponseSchema, response, 'getTransaction');
+    }, `Failed to fetch transaction ${hash}`);
   }
 
   /**
