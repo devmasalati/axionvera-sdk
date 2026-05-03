@@ -5,14 +5,27 @@ import {
   Networks,
   Operation,
   rpc,
+  scValToNative,
   SorobanDataBuilder,
   Transaction,
-  TransactionBuilder
+  TransactionBuilder,
+  xdr
 } from "@stellar/stellar-sdk";
 
 import { AxionveraNetwork, resolveNetworkConfig } from "../utils/networkConfig";
 import { ConcurrencyConfig, DEFAULT_CONCURRENCY_CONFIG, createConcurrencyControlledClient } from "../utils/concurrencyQueue";
 import { RetryConfig, createHttpClientWithRetry, retry } from "../utils/httpInterceptor";
+import { normalizeRpcError, normalizeTransactionError, TimeoutError, InsecureNetworkError, AxionveraError, AxionveraRPCError, SimulationFailedError } from "../errors/axionveraError";
+import {
+  validateRpcResponse,
+  GetHealthResponseSchema,
+  SimulateTransactionResponseSchema,
+  GetTransactionResponseSchema,
+  ValidatedGetHealthResponse,
+  ValidatedGetTransactionResponse,
+} from "../utils/rpcSchemas";
+import { normalizeRpcError, normalizeTransactionError, TimeoutError, InsecureNetworkError, AxionveraError, AxionveraRPCError, SimulationFailedError, InvalidXDRError } from "../errors/axionveraError";
+import { assertValidXDR } from '../utils/xdrValidator';
 import { normalizeRpcError, normalizeTransactionError, TransactionTimeoutError, InsecureNetworkError, AxionveraError, AxionveraRPCError, SimulationFailedError, ValidationError, toAxionveraError } from "../errors/axionveraError";
 import { WebSocketManager } from "./websocket/websocketManager";
 import { WebSocketConfig } from "./websocket/types";
@@ -63,6 +76,131 @@ export type TransactionSendResult = {
   raw: unknown;
 };
 
+export type GetContractEventsOptions = {
+  startLedger?: number;
+  endLedger?: number;
+  limit?: number;
+  cursor?: string;
+  fetchAll?: boolean;
+  startTime?: Date | string | number | "last24Hours";
+};
+
+export type ContractEventResult = Omit<rpc.Api.EventResponse, "topic" | "value"> & {
+  topic: unknown[];
+  value: unknown;
+};
+
+export type GetContractEventsResult = {
+  events: ContractEventResult[];
+  pagingToken?: string;
+/** Snapshot version for forward-compatibility of (de)serialized state. */
+export const HYDRATION_STATE_VERSION = 1 as const;
+
+/** A JSON-serializable value, with Date allowed inside simulation context. */
+export type SerializableValue =
+  | string
+  | number
+  | boolean
+  | null
+  | Date
+  | SerializableValue[]
+  | { [key: string]: SerializableValue };
+
+export type SimulationContext = { [key: string]: SerializableValue };
+
+export interface PendingTransaction {
+  hash: string;
+  simulationContext?: SimulationContext;
+  submittedAt: Date;
+  intervalMs: number;
+  deadline: Date;
+  label?: string;
+}
+
+export interface TrackedTransaction extends PendingTransaction {
+  /** Resolves with the final transaction result; rejects on error/timeout. */
+  promise: Promise<unknown>;
+  /** Cancels the polling loop without rejecting outstanding awaiters. */
+  cancel: () => void;
+}
+
+export interface SerializedPendingTransaction {
+  hash: string;
+  simulationContext?: SimulationContext;
+  submittedAt: string;
+  intervalMs: number;
+  deadline: string;
+  label?: string;
+}
+
+export interface ExportedState {
+  version: typeof HYDRATION_STATE_VERSION;
+  exportedAt: string;
+  pending: SerializedPendingTransaction[];
+}
+
+export interface TrackTransactionOptions {
+  hash: string;
+  simulationContext?: SimulationContext;
+  intervalMs?: number;
+  timeoutMs?: number;
+  /** Absolute deadline; takes precedence over timeoutMs when restoring. */
+  deadline?: Date;
+  label?: string;
+}
+
+const DATE_MARKER = "__date" as const;
+
+/** Walk a value, replacing Date instances with `{ __date: ISO }` markers. */
+function freezeDates(value: SerializableValue): SerializableValue {
+  if (value instanceof Date) {
+    return { [DATE_MARKER]: value.toISOString() };
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => freezeDates(item));
+  }
+  if (value !== null && typeof value === "object") {
+    const out: { [key: string]: SerializableValue } = {};
+    for (const key of Object.keys(value)) {
+      out[key] = freezeDates((value as { [key: string]: SerializableValue })[key] as SerializableValue);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** Walk a value, restoring `{ __date: ISO }` markers into Date instances. */
+function thawDates(value: SerializableValue): SerializableValue {
+  if (Array.isArray(value)) {
+    return value.map((item) => thawDates(item));
+  }
+  if (value !== null && typeof value === "object" && !(value instanceof Date)) {
+    const obj = value as { [key: string]: SerializableValue };
+    const marker = obj[DATE_MARKER];
+    if (typeof marker === "string" && Object.keys(obj).length === 1) {
+      const parsed = new Date(marker);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed;
+      }
+    }
+    const out: { [key: string]: SerializableValue } = {};
+    for (const key of Object.keys(obj)) {
+      out[key] = thawDates(obj[key] as SerializableValue);
+    }
+    return out;
+  }
+  return value;
+}
+
+function freezeContext(ctx: SimulationContext | undefined): SimulationContext | undefined {
+  if (!ctx) return undefined;
+  return freezeDates(ctx) as SimulationContext;
+}
+
+function thawContext(ctx: SimulationContext | undefined): SimulationContext | undefined {
+  if (!ctx) return undefined;
+  return thawDates(ctx) as SimulationContext;
+}
 type TransactionResponseRecord = Record<string, unknown>;
 
 export type TransactionPollResult = TransactionResponseRecord & {
@@ -105,6 +243,8 @@ export class StellarClient {
   readonly webSocketManager?: WebSocketManager;
   /** Logger instance for debugging and monitoring. */
   readonly logger: Logger;
+  /** In-memory registry of currently polling transactions. */
+  private readonly pendingTransactions = new Map<string, TrackedTransaction>();
 /** Timeout for account fetching in milliseconds. */
   readonly accountFetchTimeoutMs: number;
   /** TTL for cached account sequence in milliseconds. */
@@ -208,6 +348,7 @@ this.accountCache = new Map();
         {
           onEvent: (event) => this.logger.debug('WebSocket event received:', event),
           onConnectionChange: (connected) => this.logger.debug(`WebSocket connection changed: ${connected}`),
+          logger: this.logger,
         }
       );
     }
@@ -239,10 +380,12 @@ this.accountCache = new Map();
    * console.log("RPC Status:", health.status);
    * ```
    */
-  async getHealth(): Promise<rpc.Api.GetHealthResponse> {
+  async getHealth(): Promise<ValidatedGetHealthResponse> {
     try {
-      return await retry(() => this.rpc.getHealth(), this.retryConfig);
+      const response = await retry(() => this.rpc.getHealth(), this.retryConfig);
+      return validateRpcResponse(GetHealthResponseSchema, response, 'getHealth');
     } catch (error) {
+      if (error instanceof AxionveraError) throw error;
       throw new AxionveraRPCError(
         error instanceof Error ? error.message : 'RPC operation failed: getHealth',
         'getHealth',
@@ -296,6 +439,35 @@ this.accountCache = new Map();
       throw new AxionveraRPCError(
         error instanceof Error ? error.message : 'RPC operation failed: getLatestLedger',
         'getLatestLedger',
+        { originalError: error }
+      );
+    }
+  }
+
+  async getContractEvents(
+    contractId: string,
+    topicFilters?: string[][],
+    options: GetContractEventsOptions = {}
+  ): Promise<GetContractEventsResult> {
+    try {
+      const endLedger = await this.resolveEndLedger(options.endLedger);
+      const startLedger = this.resolveStartLedger(options, endLedger);
+      const normalizedStartLedger = Math.min(startLedger, endLedger);
+      const normalizedEndLedger = Math.max(startLedger, endLedger);
+
+      return await this.fetchContractEventsRange({
+        contractId,
+        topicFilters,
+        startLedger: normalizedStartLedger,
+        endLedger: normalizedEndLedger,
+        limit: options.limit,
+        cursor: options.cursor,
+        fetchAll: options.fetchAll ?? false
+      });
+    } catch (error) {
+      throw new AxionveraRPCError(
+        error instanceof Error ? error.message : 'RPC operation failed: getEvents',
+        'getEvents',
         { originalError: error }
       );
     }
@@ -708,12 +880,13 @@ this.accountCache = new Map();
   ): Promise<rpc.Api.SimulateTransactionResponse> {
     try {
       const result = await this.rpc.simulateTransaction(tx);
+      validateRpcResponse(SimulateTransactionResponseSchema, result, 'simulateTransaction');
       if (rpc.Api.isSimulationError(result)) {
         throw new SimulationFailedError(result.error, { simulationResult: result });
       }
       return result;
     } catch (error) {
-      if (error instanceof SimulationFailedError) throw error;
+      if (error instanceof AxionveraError) throw error;
       throw new SimulationFailedError(
         error instanceof Error ? error.message : 'Transaction simulation failed',
         { originalError: error }
@@ -722,6 +895,117 @@ this.accountCache = new Map();
   }
 
   /**
+   * Simulates multiple operations in a single batch transaction.
+   * This is more efficient than simulating operations one by one, especially when
+   * a user wants to perform multiple actions (e.g., deposit into 3 vaults).
+   *
+   * All operations are combined into a single transaction and sent to the Soroban RPC
+   * simulateTransaction endpoint, which returns results for each operation.
+   *
+   * Note: Be aware of Soroban transaction limits. A large batch may fail if it exceeds
+   * the maximum CPU/RAM limits for a single transaction.
+   *
+   * @param params - Batch simulation parameters
+   * @param params.operations - Array of XDR operations to simulate
+   * @param params.sourceAccount - The source account for the transaction
+   * @param params.fee - The fee per operation (default: 100_000)
+   * @param params.timeoutInSeconds - Transaction timeout in seconds (default: 60)
+   * @returns Array of simulation results, one for each operation
+   * @throws SimulationFailedError if the batch simulation fails
+   * @throws AxionveraError if the transaction building fails
+   *
+   * @example
+   * ```typescript
+   * const client = new StellarClient({ network: "testnet" });
+   * const account = await client.getAccount(publicKey);
+   *
+   * // Build three deposit operations
+   * const op1 = buildContractCallOperation({
+   *   contractId: vault1,
+   *   method: "deposit",
+   *   args: [amount1]
+   * });
+   * const op2 = buildContractCallOperation({
+   *   contractId: vault2,
+   *   method: "deposit",
+   *   args: [amount2]
+   * });
+   * const op3 = buildContractCallOperation({
+   *   contractId: vault3,
+   *   method: "deposit",
+   *   args: [amount3]
+   * });
+   *
+   * // Simulate all three in one call
+   * const results = await client.simulateBatch({
+   *   operations: [op1, op2, op3],
+   *   sourceAccount: account
+   * });
+   *
+   * // results[0], results[1], results[2] contain the individual results
+   * ```
+   */
+  async simulateBatch(params: {
+    operations: xdr.Operation[];
+    sourceAccount: Account;
+    fee?: number;
+    timeoutInSeconds?: number;
+  }): Promise<rpc.Api.SimulateTransactionResponse['result']> {
+    try {
+      if (!params.operations || params.operations.length === 0) {
+        throw new AxionveraError('At least one operation is required for batch simulation');
+      }
+
+      // Calculate fee: multiply by number of operations
+      const operationCount = params.operations.length;
+      const feePerOperation = params.fee ?? 100_000;
+      const totalFee = (feePerOperation * operationCount).toString();
+      const timeoutInSeconds = params.timeoutInSeconds ?? 60;
+
+      // Build a transaction with all operations
+      const builder = new TransactionBuilder(params.sourceAccount, {
+        fee: totalFee,
+        networkPassphrase: this.networkPassphrase
+      });
+
+      // Add all operations to the transaction
+      for (const operation of params.operations) {
+        builder.addOperation(operation);
+      }
+
+      const tx = builder.setTimeout(timeoutInSeconds).build();
+
+      // Simulate the combined transaction
+      const result = await this.rpc.simulateTransaction(tx);
+
+      if (rpc.Api.isSimulationError(result)) {
+        throw new SimulationFailedError(result.error, { simulationResult: result });
+      }
+
+      // Return only the results array
+      if (!result.result) {
+        throw new SimulationFailedError(
+          'No results returned from batch simulation',
+          { simulationResult: result }
+        );
+      }
+
+      return result.result;
+    } catch (error) {
+      if (error instanceof SimulationFailedError) throw error;
+      if (error instanceof AxionveraError) throw error;
+      throw new SimulationFailedError(
+        error instanceof Error ? error.message : 'Batch simulation failed',
+        { originalError: error }
+      );
+    }
+  }
+
+  /**
+   * Prepares a transaction by fetching the current ledger sequence
+   * and setting the correct min sequence age.
+   * @param tx - The transaction to prepare
+   * @returns The prepared transaction
    * Prepares a transaction by fetching the current ledger sequence and setting the correct min sequence age.
    * @param tx - The transaction to prepare (Transaction or FeeBumpTransaction)
    * @returns The prepared transaction with updated sequence and fee information
@@ -808,11 +1092,25 @@ this.accountCache = new Map();
           this.networkPassphrase
         );
 
+        // Sanitize the wallet-returned XDR before parsing to prevent
+        // injection / buffer panic from a malicious wallet response.
+        assertValidXDR(signedXdr, 'sendTransaction (wallet signedXdr)');
+
         // Reconstruct signed transaction from XDR
-        finalTx = TransactionBuilder.fromXDR(
-          signedXdr,
-          this.networkPassphrase
-        );
+        try {
+          finalTx = TransactionBuilder.fromXDR(
+            signedXdr,
+            this.networkPassphrase
+          );
+        } catch (err) {
+          throw new InvalidXDRError(
+            `sendTransaction: wallet returned an XDR string that could not be parsed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            signedXdr,
+            { originalError: err },
+          );
+        }
       }
 
       // Submit either original or signed transaction
@@ -839,11 +1137,18 @@ this.accountCache = new Map();
    * console.log("Status:", txStatus.status);
    * ```
    */
-  async getTransaction(hash: string): Promise<unknown> {
-    return retry(() => this.rpc.getTransaction(hash), this.retryConfig);
+  async getTransaction(hash: string): Promise<ValidatedGetTransactionResponse> {
+    const response = await retry(() => this.rpc.getTransaction(hash), this.retryConfig);
+    return validateRpcResponse(GetTransactionResponseSchema, response, 'getTransaction');
   }
 
   /**
+   * Polls for a transaction to be confirmed or rejected.
+   *
+   * The transaction is also registered in the in-memory pending-transaction
+   * registry so that {@link exportState} can capture it for later
+   * {@link importState} hydration (e.g. after a page refresh).
+   *
    * Polls for a transaction to be confirmed or rejected, waiting until it reaches a final state.
    * @param hash - The transaction hash to wait for
    * @param params - Optional polling parameters
@@ -863,6 +1168,119 @@ this.accountCache = new Map();
   async pollTransaction(
     hash: string,
     params?: { timeoutMs?: number; intervalMs?: number }
+  ): Promise<unknown> {
+    const tracked = this.trackTransaction({
+      hash,
+      timeoutMs: params?.timeoutMs,
+      intervalMs: params?.intervalMs,
+    });
+    return tracked.promise;
+  }
+
+  /**
+   * Registers a transaction in the pending-transaction registry and starts a
+   * polling loop in the background. The returned object exposes the polling
+   * promise and a cancel handle.
+   *
+   * If the same hash is already tracked, the existing entry is returned and
+   * no new poll is started.
+   *
+   * @param options - Tracking options including hash, optional simulation
+   * context, polling cadence, and timeout/deadline.
+   */
+  trackTransaction(options: TrackTransactionOptions): TrackedTransaction {
+    const existing = this.pendingTransactions.get(options.hash);
+    if (existing) return existing;
+
+    const intervalMs = options.intervalMs ?? 1_000;
+    const submittedAt = new Date();
+    const deadline =
+      options.deadline ??
+      new Date(submittedAt.getTime() + (options.timeoutMs ?? 30_000));
+
+    let cancelled: boolean = false;
+    const cancel = (): void => {
+      cancelled = true;
+    };
+
+    // Register the entry *before* starting the polling loop so that the
+    // very first getTransaction() call already sees the tracked state.
+    const tracked: TrackedTransaction = {
+      hash: options.hash,
+      simulationContext: options.simulationContext,
+      submittedAt,
+      intervalMs,
+      deadline,
+      label: options.label,
+      promise: Promise.resolve(),
+      cancel,
+    };
+    this.pendingTransactions.set(options.hash, tracked);
+
+    tracked.promise = (async (): Promise<unknown> => {
+      try {
+        while (!cancelled && Date.now() < deadline.getTime()) {
+          const res = await this.getTransaction(options.hash);
+          const status = (res as { status?: string } | null | undefined)?.status;
+          if (status && status !== "NOT_FOUND") {
+            return res;
+          }
+          await new Promise<void>((r) => setTimeout(r, intervalMs));
+        }
+        if (cancelled) {
+          throw new AxionveraError(
+            `Transaction tracking cancelled for ${options.hash}`
+          );
+        }
+        throw new TimeoutError(
+          `Timed out waiting for transaction ${options.hash} after ${String(
+            deadline.getTime() - submittedAt.getTime()
+          )}ms`
+        );
+      } finally {
+        this.pendingTransactions.delete(options.hash);
+      }
+    })();
+
+    // Avoid unhandled-rejection warnings if the caller ignores the promise.
+    tracked.promise.catch(() => undefined);
+
+    return tracked;
+  }
+
+  /**
+   * Returns the list of currently polling transactions (a live view).
+   */
+  getPendingTransactions(): PendingTransaction[] {
+    return Array.from(this.pendingTransactions.values()).map((t) => ({
+      hash: t.hash,
+      simulationContext: t.simulationContext,
+      submittedAt: t.submittedAt,
+      intervalMs: t.intervalMs,
+      deadline: t.deadline,
+      label: t.label,
+    }));
+  }
+
+  /**
+   * Serializes the currently polling transactions to a JSON-safe object so
+   * the dApp can persist it (e.g. to localStorage) and survive a page
+   * refresh.
+   *
+   * Dates inside `simulationContext` are encoded with a `{ __date: ISO }`
+   * marker so {@link importState} can revive them losslessly.
+   */
+  exportState(): ExportedState {
+    const pending: SerializedPendingTransaction[] = [];
+    for (const tx of this.pendingTransactions.values()) {
+      pending.push({
+        hash: tx.hash,
+        simulationContext: freezeContext(tx.simulationContext),
+        submittedAt: tx.submittedAt.toISOString(),
+        intervalMs: tx.intervalMs,
+        deadline: tx.deadline.toISOString(),
+        label: tx.label,
+      });
   ): Promise<TransactionPollResult> {
     const timeoutMs = params?.timeoutMs ?? 30_000;
     const intervalMs = params?.intervalMs ?? 1_000;
@@ -968,7 +1386,69 @@ this.accountCache = new Map();
         );
       }
     }
+    return {
+      version: HYDRATION_STATE_VERSION,
+      exportedAt: new Date().toISOString(),
+      pending,
+    };
+  }
 
+  /**
+   * Re-initializes polling loops from a previously {@link exportState}'d
+   * snapshot. Accepts the snapshot object or a JSON string.
+   *
+   * - Entries whose `deadline` has already passed are dropped.
+   * - Entries whose hash is already being tracked are kept as-is (idempotent).
+   * - Date markers inside `simulationContext` are revived back into Date
+   *   instances.
+   *
+   * @returns The list of restored {@link TrackedTransaction}s.
+   */
+  importState(state: ExportedState | string): TrackedTransaction[] {
+    const raw: unknown = typeof state === "string" ? JSON.parse(state) : state;
+    if (!raw || typeof raw !== "object") {
+      throw new AxionveraError("Invalid hydration state: expected object or JSON string");
+    }
+    const parsed = raw as { version?: unknown; pending?: unknown };
+    if (parsed.version !== HYDRATION_STATE_VERSION) {
+      throw new AxionveraError(
+        `Unsupported hydration state version: ${String(parsed.version)} (expected ${String(HYDRATION_STATE_VERSION)})`
+      );
+    }
+    if (!Array.isArray(parsed.pending)) {
+      throw new AxionveraError("Invalid hydration state: `pending` must be an array");
+    }
+
+    const restored: TrackedTransaction[] = [];
+    const now = Date.now();
+    for (const candidate of parsed.pending as unknown[]) {
+      if (!candidate || typeof candidate !== "object") continue;
+      const entry = candidate as Partial<SerializedPendingTransaction>;
+      if (typeof entry.hash !== "string" || entry.hash.length === 0) continue;
+
+      const existing = this.pendingTransactions.get(entry.hash);
+      if (existing) {
+        restored.push(existing);
+        continue;
+      }
+      const deadline =
+        typeof entry.deadline === "string" ? new Date(entry.deadline) : new Date(NaN);
+      if (Number.isNaN(deadline.getTime()) || deadline.getTime() <= now) continue;
+
+      const intervalMs =
+        typeof entry.intervalMs === "number" && entry.intervalMs > 0
+          ? entry.intervalMs
+          : 1_000;
+      const tracked = this.trackTransaction({
+        hash: entry.hash,
+        simulationContext: thawContext(entry.simulationContext),
+        intervalMs,
+        deadline,
+        label: entry.label,
+      });
+      restored.push(tracked);
+    }
+    return restored;
     const bufferedSorobanData = new SorobanDataBuilder(sorobanData)
       .setResources(
         multiplyAndCeil(resources.instructions(), this.feeBufferMultiplier),
@@ -986,6 +1466,59 @@ this.accountCache = new Map();
   }
 
   /**
+   * Waits for a transaction to be confirmed or rejected with a Promise-based API.
+   * 
+   * This is a convenience wrapper around pollTransaction that provides a simpler,
+   * more intuitive API for the common use case of waiting for a transaction to complete.
+   * It resolves when the transaction reaches a final state (SUCCESS or FAILED),
+   * or rejects if the transaction times out.
+   * 
+   * Similar to waitForTransactionReceipt in EVM libraries like viem, making it easier
+   * for developers moving from Ethereum to Stellar/Soroban.
+   * 
+   * @param hash - The transaction hash to wait for
+   * @param params - Wait parameters
+   * @param params.timeoutMs - Maximum time to wait in milliseconds (default: 30_000)
+   * @param params.intervalMs - Time between polls in milliseconds (default: 1_000)
+   * @returns Promise that resolves with the transaction result when confirmed, or rejects on timeout/failure
+   * @throws TimeoutError if the transaction doesn't reach a final state within timeoutMs
+   * 
+   * @example
+   * ```typescript
+   * // Simple usage - wait for transaction with defaults (30 seconds)
+   * const result = await client.waitForTransaction(txHash);
+   * console.log('Transaction confirmed:', result);
+   * 
+   * // With custom timeout and polling interval
+   * const result = await client.waitForTransaction(txHash, {
+   *   timeoutMs: 60_000,     // Wait up to 60 seconds
+   *   intervalMs: 500        // Poll every 500ms
+   * });
+   * 
+   * // In a typical usage flow
+   * const signed = await client.sendTransaction(tx);
+   * try {
+   *   const confirmed = await client.waitForTransaction(signed.hash);
+   *   console.log('Success:', confirmed);
+   * } catch (error) {
+   *   if (error instanceof TimeoutError) {
+   *     console.log('Transaction took too long to confirm');
+   *   } else {
+   *     console.log('Transaction failed:', error);
+   *   }
+   * }
+   * ```
+   */
+  async waitForTransaction(
+    hash: string,
+    params?: { timeoutMs?: number; intervalMs?: number }
+  ): Promise<unknown> {
+    return this.pollTransaction(hash, params);
+  }
+
+  /**
+   * Signs a transaction using a local Keypair.
+   * This is a convenience method for local signing without a wallet connector.
    * Signs a transaction using a local Keypair for server-side or automated signing.
    * @param tx - The transaction to sign
    * @param keypair - The Keypair to sign with
@@ -1015,6 +1548,16 @@ this.accountCache = new Map();
   }
 
   /**
+   * Parses a base64-encoded transaction XDR string.
+   *
+   * Validates the string against the base64 alphabet and the maximum permitted
+   * length before handing it to the stellar-sdk parser, preventing
+   * injection / Buffer allocation panics from untrusted inputs.
+   *
+   * @param transactionXdr - The base64-encoded transaction (consumer-supplied)
+   * @param networkPassphrase - The network passphrase
+   * @returns The parsed Transaction or FeeBumpTransaction
+   * @throws {InvalidXDRError} If the XDR string is invalid or oversized
    * Parses a base64-encoded transaction XDR string into a Transaction or FeeBumpTransaction object.
    * @param transactionXdr - The base64-encoded transaction XDR string
    * @param networkPassphrase - The network passphrase for the transaction
@@ -1036,7 +1579,19 @@ this.accountCache = new Map();
     transactionXdr: string,
     networkPassphrase: string
   ): Transaction | FeeBumpTransaction {
-    return TransactionBuilder.fromXDR(transactionXdr, networkPassphrase);
+    // Sanitize before stellar-sdk Buffer allocation.
+    assertValidXDR(transactionXdr, 'parseTransactionXdr');
+    try {
+      return TransactionBuilder.fromXDR(transactionXdr, networkPassphrase);
+    } catch (err) {
+      throw new InvalidXDRError(
+        `parseTransactionXdr: failed to parse XDR: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        transactionXdr,
+        { originalError: err },
+      );
+    }
   }
 
   /**
@@ -1107,6 +1662,248 @@ this.accountCache = new Map();
       queueTimeout: this.concurrencyConfig.queueTimeout,
       message: 'Stats not available from wrapped client'
     };
+  }
+
+  private async resolveEndLedger(providedEndLedger?: number): Promise<number> {
+    if (providedEndLedger !== undefined) {
+      return Math.max(1, providedEndLedger);
+    }
+
+    const latestLedger = await this.getLatestLedger();
+    const sequence = Number((latestLedger as any).sequence);
+    return Number.isFinite(sequence) && sequence > 0 ? sequence : 1;
+  }
+
+  private resolveStartLedger(options: GetContractEventsOptions, endLedger: number): number {
+    if (options.startLedger !== undefined) {
+      return Math.max(1, options.startLedger);
+    }
+
+    if (options.startTime === undefined) {
+      return endLedger;
+    }
+
+    const nowMs = Date.now();
+    const timestampMs = this.resolveStartTimeMs(options.startTime, nowMs);
+    const elapsedMs = Math.max(0, nowMs - timestampMs);
+    const ledgersToRewind = Math.ceil(elapsedMs / 5_000);
+    return Math.max(1, endLedger - ledgersToRewind);
+  }
+
+  private resolveStartTimeMs(startTime: Date | string | number | "last24Hours", nowMs: number): number {
+    if (startTime === 'last24Hours') {
+      return nowMs - 24 * 60 * 60 * 1_000;
+    }
+
+    if (startTime instanceof Date) {
+      return startTime.getTime();
+    }
+
+    if (typeof startTime === 'number') {
+      return startTime;
+    }
+
+    const parsed = Date.parse(startTime);
+    if (!Number.isFinite(parsed)) {
+      throw new AxionveraError(`Invalid startTime value: ${startTime}`);
+    }
+
+    return parsed;
+  }
+
+  private async fetchContractEventsRange(params: {
+    contractId: string;
+    topicFilters?: string[][];
+    startLedger: number;
+    endLedger: number;
+    limit?: number;
+    cursor?: string;
+    fetchAll: boolean;
+  }): Promise<GetContractEventsResult> {
+    let cursor = params.cursor;
+    const events: ContractEventResult[] = [];
+    let pagingToken: string | undefined;
+    const seenPagingTokens = new Set<string>();
+
+    while (true) {
+      try {
+        const response = await retry(() => this.rpc.getEvents(this.buildGetEventsRequest(params, cursor)), this.retryConfig);
+        const pageEvents = Array.isArray((response as any).events)
+          ? ((response as any).events as rpc.Api.EventResponse[])
+          : [];
+
+        events.push(...pageEvents.map((event) => this.decodeContractEvent(event)));
+
+        pagingToken = this.extractPagingToken(response, pageEvents);
+        if (!params.fetchAll || !pagingToken) {
+          return { events, pagingToken };
+        }
+
+        if (seenPagingTokens.has(pagingToken)) {
+          return { events, pagingToken };
+        }
+
+        seenPagingTokens.add(pagingToken);
+
+        cursor = pagingToken;
+      } catch (error) {
+        if (this.isPayloadTooLarge(error) && params.startLedger < params.endLedger) {
+          const midpoint = Math.floor((params.startLedger + params.endLedger) / 2);
+          const firstHalf = await this.fetchContractEventsRange({
+            ...params,
+            endLedger: midpoint,
+            cursor
+          });
+
+          if (!params.fetchAll) {
+            return firstHalf;
+          }
+
+          const secondHalf = await this.fetchContractEventsRange({
+            ...params,
+            startLedger: midpoint + 1,
+            cursor: undefined
+          });
+
+          return {
+            events: [...firstHalf.events, ...secondHalf.events],
+            pagingToken: secondHalf.pagingToken ?? firstHalf.pagingToken
+          };
+        }
+
+        throw error;
+      }
+    }
+  }
+
+  private buildGetEventsRequest(
+    params: {
+      contractId: string;
+      topicFilters?: string[][];
+      startLedger: number;
+      endLedger: number;
+      limit?: number;
+    },
+    cursor?: string
+  ): any {
+    const filter: any = {
+      type: 'contract',
+      contractIds: [params.contractId]
+    };
+
+    if (params.topicFilters && params.topicFilters.length > 0) {
+      filter.topics = params.topicFilters;
+    }
+
+    const request: any = {
+      startLedger: params.startLedger,
+      endLedger: params.endLedger,
+      filters: [filter]
+    };
+
+    if (params.limit !== undefined || cursor !== undefined) {
+      request.pagination = {};
+      if (params.limit !== undefined) {
+        request.pagination.limit = params.limit;
+      }
+      if (cursor !== undefined) {
+        request.pagination.cursor = cursor;
+      }
+    }
+
+    return request;
+  }
+
+  private decodeContractEvent(event: rpc.Api.EventResponse): ContractEventResult {
+    const decodedTopic = Array.isArray((event as any).topic)
+      ? ((event as any).topic as string[]).map((entry) => this.decodeScVal(entry))
+      : [];
+    const decodedValue = typeof (event as any).value === 'string'
+      ? this.decodeScVal((event as any).value)
+      : (event as any).value;
+
+    return {
+      ...(event as any),
+      topic: decodedTopic,
+      value: decodedValue
+    };
+  }
+
+  private decodeScVal(encodedScVal: string): unknown {
+    try {
+      return scValToNative(xdr.ScVal.fromXDR(encodedScVal, 'base64'));
+    } catch {
+      return encodedScVal;
+    }
+  }
+
+  private extractPagingToken(response: unknown, events: rpc.Api.EventResponse[]): string | undefined {
+    const responseToken = (response as any).pagingToken;
+    if (typeof responseToken === 'string' && responseToken.length > 0) {
+      return responseToken;
+    }
+
+    const lastEvent = events[events.length - 1] as any;
+    const eventToken = lastEvent?.pagingToken;
+    if (typeof eventToken === 'string' && eventToken.length > 0) {
+      return eventToken;
+    }
+
+    return undefined;
+  }
+
+  private isPayloadTooLarge(error: unknown): boolean {
+    const statusCode = (error as any)?.response?.status ?? (error as any)?.status;
+    const message = typeof (error as any)?.message === 'string' ? (error as any).message : '';
+    return statusCode === 413 || /payload too large|request entity too large|413/i.test(message);
+  }
+  /**
+   * Subscribe to contract events by polling Soroban RPC.
+   * Returned emitters should be closed when no longer needed.
+   */
+  subscribeToEvents(
+    contractId: string,
+    topics: string[] = [],
+    pollingIntervalMs = 5000
+  ): ContractEventEmitter {
+    let emitter: ContractEventEmitter;
+    emitter = new ContractEventEmitter(
+      this,
+      contractId,
+      topics,
+      pollingIntervalMs,
+      () => {
+        this.eventEmitters.delete(emitter);
+      }
+    );
+
+    this.eventEmitters.add(emitter);
+    emitter.start();
+    return emitter;
+  }
+
+  /**
+   * Stop and release all contract event emitters created by this client.
+   */
+  removeAllListeners(): void {
+    for (const emitter of this.eventEmitters) {
+      emitter.close();
+    }
+    this.eventEmitters.clear();
+    if (this.webSocketManager) {
+      this.webSocketManager.disconnect();
+    }
+  }
+
+  /**
+   * Cleanup all asynchronous resources owned by this client.
+   */
+  async cleanup(): Promise<void> {
+    this.removeAllListeners();
+    if (this.webSocketManager) {
+      this.webSocketManager.disconnect();
+    }
+    await this.logger.destroy();
   }
 }
 

@@ -316,5 +316,9 @@ export function useWallet(): UseWalletResult {
   };
 }
 
+export { StellarClient, EventFilter, SorobanEvent, CloudWatchConfig, WebSocketConfig } from '@axionvera/core';
+export { useVault } from './useVault';
+export type { TxStep, UseVaultState, UseVaultActions } from './useVault';
+export { TransactionStepper } from './TransactionStepper';
 export { FreighterWalletConnector };
 export type { StellarClientOptions, WalletConnector };

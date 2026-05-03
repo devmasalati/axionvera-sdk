@@ -13,44 +13,24 @@
   ],
   "exports": {
     ".": {
-      "import": {
-        "types": "./dist/index.d.mts",
-        "default": "./dist/index.mjs"
-      },
-      "require": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      }
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
     },
     "./vault": {
-      "import": {
-        "types": "./dist/vault.d.mts",
-        "default": "./dist/vault.mjs"
-      },
-      "require": {
-        "types": "./dist/vault.d.ts",
-        "default": "./dist/vault.js"
-      }
+      "import": "./dist/vault.mjs",
+      "require": "./dist/vault.js",
+      "types": "./dist/vault.d.ts"
     },
     "./client": {
-      "import": {
-        "types": "./dist/client.d.mts",
-        "default": "./dist/client.mjs"
-      },
-      "require": {
-        "types": "./dist/client.d.ts",
-        "default": "./dist/client.js"
-      }
+      "import": "./dist/client.mjs",
+      "require": "./dist/client.js",
+      "types": "./dist/client.d.ts"
     },
     "./utils": {
-      "import": {
-        "types": "./dist/utils.d.mts",
-        "default": "./dist/utils.mjs"
-      },
-      "require": {
-        "types": "./dist/utils.d.ts",
-        "default": "./dist/utils.js"
-      }
+      "import": "./dist/utils.mjs",
+      "require": "./dist/utils.js",
+      "types": "./dist/utils.d.ts"
     },
     "./wallet": {
       "import": {
@@ -95,7 +75,8 @@
   "sideEffects": false,
   "dependencies": {
     "@stellar/stellar-sdk": "^14.6.1",
-    "axios": "^1.15.2"
+    "axios": "^1.7.9",
+    "valibot": "^1.3.1"
   },
   "peerDependencies": {
     "@stellar/freighter-api": "^6.0.1",
@@ -126,7 +107,7 @@
     "msw": "^1.3.5",
     "rimraf": "^6.0.1",
     "size-limit": "^11.1.6",
-    "ts-jest": "^29.4.9",
+    "ts-jest": "^29.2.5",
     "tsup": "^8.3.6",
     "typedoc": "^0.28.18",
     "typedoc-plugin-markdown": "^4.11.0",
