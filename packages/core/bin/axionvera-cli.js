@@ -1,163 +1,83 @@
 #!/usr/bin/env node
-// axionvera-cli — Soroban contract code generator
-// Usage: axionvera-cli codegen <contract.wasm> [options]
+// axionvera-cli — command-line utility for interacting with Axionvera
+// contracts and Stellar/Soroban networks.
 //
-// Options:
-//   --out, -o <dir>       Output directory (default: current directory)
-//   --name, -n <name>     Class name (default: derived from wasm filename)
-//   --import <path>       Import path for @axionvera/core (default: "@axionvera/core")
-//   --help, -h            Show this help message
+// Commands:
+//   network   Show the resolved network configuration and RPC health
+//   balance   Query classic or Soroban token balances for an account
+//   invoke    Simulate or submit a contract method call
+//   codegen   Generate a TypeScript contract client from a WASM spec
+//
+// Run `axionvera-cli <command> --help` for command-specific options.
 
 "use strict";
 
-const path = require("path");
-const fs = require("fs");
+const pkg = require("../package.json");
 
-// ─── Argument parsing ─────────────────────────────────────────────────────────
-
-const args = process.argv.slice(2);
+const COMMANDS = {
+  network: () => require("./commands/network"),
+  balance: () => require("./commands/balance"),
+  invoke: () => require("./commands/invoke"),
+  codegen: () => require("./commands/codegen"),
+};
 
 function printHelp() {
   console.log(`
-axionvera-cli — Soroban contract TypeScript code generator
+axionvera-cli — interact with Axionvera contracts and Stellar/Soroban networks
 
 Usage:
-  axionvera-cli codegen <contract.wasm> [options]
+  axionvera-cli <command> [options]
 
-Options:
-  --out, -o <dir>     Output directory (default: current directory)
-  --name, -n <name>   Class name (default: derived from wasm filename)
-  --import <path>     Import path for @axionvera/core (default: "@axionvera/core")
-  --help, -h          Show this help message
+Commands:
+  network   Show the resolved network configuration and RPC health
+  balance   Query classic or Soroban token balances for an account
+  invoke    Simulate or submit a contract method call
+  codegen   Generate a TypeScript contract client from a WASM spec
 
-Example:
-  axionvera-cli codegen ./target/wasm32-unknown-unknown/release/my_token.wasm \\
-    --out ./src/contracts \\
-    --name TokenContract
+Global:
+  --help, -h       Show this help message
+  --version, -v    Show the CLI version
+
+Network selection (supported by network/balance/invoke):
+  --network, -n <name>   testnet | futurenet | mainnet (default: testnet)
+  --rpc <url>            Override the Soroban RPC URL
+  --horizon <url>        Override the Horizon URL
+
+Environment variables:
+  AXIONVERA_NETWORK, AXIONVERA_RPC_URL, AXIONVERA_HORIZON_URL,
+  AXIONVERA_NETWORK_PASSPHRASE
+
+Run "axionvera-cli <command> --help" for command-specific options.
 `);
 }
 
-if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
-  printHelp();
-  process.exit(0);
-}
+async function main() {
+  const argv = process.argv.slice(2);
 
-const command = args[0];
+  if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
+    printHelp();
+    process.exit(0);
+  }
 
-if (command !== "codegen") {
-  console.error(`Unknown command: ${command}. Run with --help for usage.`);
-  process.exit(1);
-}
+  if (argv[0] === "--version" || argv[0] === "-v") {
+    console.log(pkg.version);
+    process.exit(0);
+  }
 
-// Parse remaining flags
-let wasmPath = null;
-let outDir = process.cwd();
-let className = null;
-let coreImport = "@axionvera/core";
+  const command = argv[0];
+  const loader = COMMANDS[command];
 
-for (let i = 1; i < args.length; i++) {
-  const arg = args[i];
-  if (arg === "--out" || arg === "-o") {
-    outDir = args[++i];
-  } else if (arg === "--name" || arg === "-n") {
-    className = args[++i];
-  } else if (arg === "--import") {
-    coreImport = args[++i];
-  } else if (!arg.startsWith("-")) {
-    wasmPath = arg;
-  } else {
-    console.error(`Unknown option: ${arg}. Run with --help for usage.`);
+  if (!loader) {
+    console.error(`Unknown command: ${command}. Run with --help for usage.`);
+    process.exit(1);
+  }
+
+  try {
+    await loader().run(argv.slice(1));
+  } catch (err) {
+    console.error(`Error: ${err && err.message ? err.message : err}`);
     process.exit(1);
   }
 }
 
-if (!wasmPath) {
-  console.error("Error: <contract.wasm> path is required.");
-  printHelp();
-  process.exit(1);
-}
-
-// Resolve paths
-const resolvedWasm = path.resolve(process.cwd(), wasmPath);
-
-if (!fs.existsSync(resolvedWasm)) {
-  console.error(`Error: WASM file not found: ${resolvedWasm}`);
-  process.exit(1);
-}
-
-// Derive class name from filename if not provided
-if (!className) {
-  const base = path.basename(resolvedWasm, ".wasm");
-  // snake_case → PascalCase + "Contract" suffix
-  className = base
-    .replace(/[-_](.)/g, (_, c) => c.toUpperCase())
-    .replace(/^(.)/, (_, c) => c.toUpperCase());
-  if (!className.toLowerCase().endsWith("contract")) {
-    className += "Contract";
-  }
-}
-
-// ─── Run codegen ──────────────────────────────────────────────────────────────
-
-// We require the compiled dist files. If running from source (ts-node / tests),
-// the TypeScript files are loaded directly via ts-node's require hook.
-// In production (after `npm run build`), the dist/ CJS files are used.
-function requireCodegen() {
-  // Try dist first (production)
-  const distParser = path.join(__dirname, "../dist/codegen/wasmParser.js");
-  const distGenerator = path.join(__dirname, "../dist/codegen/generator.js");
-  if (fs.existsSync(distParser) && fs.existsSync(distGenerator)) {
-    return {
-      parseWasm: require(distParser).parseWasm,
-      generateContractClass: require(distGenerator).generateContractClass,
-    };
-  }
-  // Fallback: try src (ts-node environment)
-  const srcParser = path.join(__dirname, "../src/codegen/wasmParser.ts");
-  if (fs.existsSync(srcParser)) {
-    // Register ts-node if available
-    try { require("ts-node/register"); } catch (_) {}
-    return {
-      parseWasm: require(srcParser).parseWasm,
-      generateContractClass: require(path.join(__dirname, "../src/codegen/generator.ts")).generateContractClass,
-    };
-  }
-  throw new Error(
-    "Could not locate codegen modules. Run `npm run build` in packages/core first."
-  );
-}
-
-let parseWasm, generateContractClass;
-try {
-  ({ parseWasm, generateContractClass } = requireCodegen());
-} catch (err) {
-  console.error(`Error loading codegen modules: ${err.message}`);
-  process.exit(1);
-}
-
-console.log(`Parsing WASM spec from: ${resolvedWasm}`);
-
-let spec;
-try {
-  spec = parseWasm(resolvedWasm);
-} catch (err) {
-  console.error(`Error parsing WASM: ${err.message}`);
-  process.exit(1);
-}
-
-console.log(
-  `Found ${spec.functions.length} function(s), ` +
-  `${spec.structs.length} struct(s), ` +
-  `${spec.enums.length} enum(s).`
-);
-
-const source = generateContractClass(spec, className, coreImport);
-
-// Write output file
-const resolvedOut = path.resolve(process.cwd(), outDir);
-fs.mkdirSync(resolvedOut, { recursive: true });
-
-const outFile = path.join(resolvedOut, `${className}.ts`);
-fs.writeFileSync(outFile, source, "utf8");
-
-console.log(`Generated: ${outFile}`);
+main();
