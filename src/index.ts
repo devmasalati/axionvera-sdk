@@ -81,3 +81,15 @@ export { isValidXDR, assertValidXDR, MAX_XDR_STRING_LENGTH } from './utils/xdrVa
 export * from './test/msw/setup';
 export * from './test/msw/handlers';
 export { server } from './test/msw/server';
+
+// Deterministic mock network (for unit / integration tests)
+export { MockNetwork, MockRpcServer, ScenarioBuilder } from './testing';
+export type {
+  MockNetworkOptions,
+  MockAccountEntry,
+  MockHealthStatus,
+  MockSimulationResult,
+  MockTransactionEntry,
+  MockEventEntry,
+  MockRpcServerSnapshot,
+} from './testing';

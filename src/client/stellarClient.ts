@@ -93,6 +93,8 @@ export type ContractEventResult = Omit<rpc.Api.EventResponse, "topic" | "value">
 export type GetContractEventsResult = {
   events: ContractEventResult[];
   pagingToken?: string;
+};
+
 /** Snapshot version for forward-compatibility of (de)serialized state. */
 export const HYDRATION_STATE_VERSION = 1 as const;
 
@@ -519,55 +521,6 @@ this.accountCache = new Map();
         return new Account(publicKey, newSequence.toString());
       }
       // No cache available, throw error
-   * Retrieves an account's information with offline cache fallback.
-   * Tries to fetch from the network first, but falls back to cached data if the network is unavailable.
-   * The cache is valid for 5 seconds and sequence numbers are incremented for sequential offline builds.
-   * @param publicKey - The account's public key (G-prefixed string)
-   * @returns The account information including sequence number and balances
-   * @throws AxionveraError if both network fetch fails and no valid cache exists
-   * @example
-   * ```typescript
-   * import { StellarClient } from "axionvera-sdk";
-   *
-   * const client = new StellarClient({ network: "testnet" });
-   *
-   * // First call fetches from network and caches the result
-   * const account1 = await client.getAccountWithCache("GD5JPQ7VKFOVRWPOEX74JYXHHFNTFZ2JE5WZ4K2MWTROVHMWHD7KUZ2V");
-   * console.log("Sequence:", account1.sequenceNumber().toString());
-   *
-   * // If network fails within 5 seconds, returns cached account with incremented sequence
-   * const account2 = await client.getAccountWithCache("GD5JPQ7VKFOVRWPOEX74JYXHHFNTFZ2JE5WZ4K2MWTROVHMWHD7KUZ2V");
-   * console.log("Cached sequence:", account2.sequenceNumber().toString());
-   * ```
-   */
-  async getAccountWithCache(publicKey: string): Promise<Account> {
-    try {
-      // Try to fetch from network
-      const account = await this.getAccount(publicKey);
-      // Update cache on success
-      this.accountCache.set(publicKey, {
-        account,
-        timestamp: Date.now()
-      });
-      return account;
-    } catch (error) {
-      // Network failed, check cache
-      const cached = this.accountCache.get(publicKey);
-      if (cached && (Date.now() - cached.timestamp < this.CACHE_TTL)) {
-        this.logger.debug(`Using cached account for ${publicKey}`);
-        // Increment sequence for sequential offline builds
-        const currentSequence = cached.account.sequenceNumber();
-        const newSequence = currentSequence + 1n;
-        // Create new account with incremented sequence
-        const cachedAccount = new Account(publicKey, newSequence.toString());
-        // Update cache with incremented sequence
-        this.accountCache.set(publicKey, {
-          account: cachedAccount,
-          timestamp: cached.timestamp
-        });
-        return cachedAccount;
-      }
-      // No valid cache, throw error
       throw new AxionveraError(
         `Failed to fetch account and no valid cache available for ${publicKey}`,
         { originalError: error }
