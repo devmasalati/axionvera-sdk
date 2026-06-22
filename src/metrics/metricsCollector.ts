@@ -1,4 +1,4 @@
-﻿import { MetricCounter, MetricGauge, MetricHistogram, MetricsSnapshot } from '../telemetry/types';
+import { MetricCounter, MetricGauge, MetricHistogram, MetricsSnapshot } from '../telemetry/types';
 
 export class MetricsCollector {
   private counters: Map<string, MetricCounter> = new Map();
@@ -55,8 +55,8 @@ export class MetricsCollector {
 
   private key(name: string, tags: Record<string, string>): string {
     const tagStr = Object.entries(tags)
-      .sort(([a], [b]) =&gt; a.localeCompare(b))
-      .map(([k, v]) =&gt; k + '=' + v)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => k + '=' + v)
       .join(',');
     return tagStr ? name + '[' + tagStr + ']' : name;
   }
